@@ -12,6 +12,7 @@ from flappy_bird.pipe import Pipe
 from flappy_bird.pipe_manager import PipeManager
 from flappy_bird.player import Player
 from flappy_bird.scoring import count_newly_passed
+from flappy_bird.state import GameState
 from flappy_bird.utils import clamp, random_gap_center
 
 DT = 1 / 60
@@ -19,6 +20,21 @@ DT = 1 / 60
 
 @pytest.fixture()
 def game():
+    """A game with a round already under way.
+
+    The physics, pipe, collision and scoring tests all drive a live round, so
+    the fixture starts one; the start-screen behaviour gets its own fixture.
+    """
+    instance = Game(headless=True)
+    instance.start_round()
+    pygame.event.clear()
+    yield instance
+    pygame.quit()
+
+
+@pytest.fixture()
+def idle_game():
+    """A freshly constructed game, still waiting in the START state."""
     instance = Game(headless=True)
     pygame.event.clear()
     yield instance
@@ -262,11 +278,11 @@ class TestGameWindow:
             settings.SCREEN_HEIGHT,
         )
 
-    def test_initial_state_is_valid(self, game):
-        assert game.pipes == []
-        assert game.score == 0
-        assert game.game_over is False
-        assert isinstance(game.player, Player)
+    def test_initial_state_is_valid(self, idle_game):
+        assert idle_game.pipes == []
+        assert idle_game.score == 0
+        assert idle_game.game_over is False
+        assert isinstance(idle_game.player, Player)
 
     def test_runs_a_bounded_number_of_frames(self, game):
         game.run(max_frames=5)
@@ -981,6 +997,593 @@ class TestScoreRendering:
         playing = self.snapshot(game)
         game.game_over = True
         assert self.snapshot(game) != playing
+
+
+def contains_color(surface: pygame.Surface, color: tuple[int, int, int]) -> bool:
+    """True when ``color`` appears anywhere on the surface."""
+    return bytes(color) in pygame.image.tostring(surface, "RGB")
+
+
+def snapshot(game: Game) -> bytes:
+    game.render()
+    return pygame.image.tostring(game.screen, "RGB")
+
+
+def press(game: Game, key: int) -> None:
+    """Deliver a single key press to the game."""
+    post_event(pygame.KEYDOWN, key=key)
+    game.handle_events()
+
+
+def click(game: Game, button: int = 1) -> None:
+    post_event(pygame.MOUSEBUTTONDOWN, button=button, pos=(10, 10))
+    game.handle_events()
+
+
+def crash(game: Game) -> None:
+    """Force an immediate collision on the next update."""
+    game.pipe_manager.pipes.append(
+        Pipe(
+            x=settings.BIRD_START_X - 10,
+            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
+        )
+    )
+    game.update(DT)
+
+
+class TestGameStateEnum:
+    def test_has_exactly_three_states(self):
+        assert [state.name for state in GameState] == [
+            "START",
+            "PLAYING",
+            "GAME_OVER",
+        ]
+
+    def test_states_are_distinct_values(self):
+        assert len({state.value for state in GameState}) == 3
+
+    def test_is_playing_only_for_playing(self):
+        assert GameState.PLAYING.is_playing is True
+        assert GameState.START.is_playing is False
+        assert GameState.GAME_OVER.is_playing is False
+
+    def test_is_over_only_for_game_over(self):
+        assert GameState.GAME_OVER.is_over is True
+        assert GameState.START.is_over is False
+        assert GameState.PLAYING.is_over is False
+
+
+class TestInitialState:
+    def test_new_game_starts_in_start(self, idle_game):
+        assert idle_game.state is GameState.START
+
+    def test_new_game_starts_with_zero_counters(self, idle_game):
+        assert idle_game.score == 0
+        assert idle_game.high_score == 0
+
+    def test_new_game_is_not_game_over(self, idle_game):
+        assert idle_game.game_over is False
+
+    def test_new_game_has_no_pipes(self, idle_game):
+        assert idle_game.pipes == []
+
+    def test_a_second_instance_is_also_in_start(self, game):
+        fresh = Game(headless=True)
+        try:
+            assert fresh.state is GameState.START
+            assert fresh.score == 0
+            assert fresh.high_score == 0
+        finally:
+            pygame.quit()
+
+    def test_state_is_not_a_raw_string(self, idle_game):
+        assert isinstance(idle_game.state, GameState)
+
+
+class TestStartStateIsFrozen:
+    def test_update_does_not_move_the_bird(self, idle_game):
+        for _ in range(120):
+            idle_game.update(DT)
+        assert idle_game.player.y == float(settings.BIRD_START_Y)
+
+    def test_update_does_not_accelerate_the_bird(self, idle_game):
+        idle_game.update(DT)
+        assert idle_game.player.velocity_y == 0.0
+
+    def test_update_does_not_spawn_pipes(self, idle_game):
+        for _ in range(600):
+            idle_game.update(DT)
+        assert idle_game.pipes == []
+        assert idle_game.pipe_manager.elapsed == 0.0
+
+    def test_update_does_not_score(self, idle_game):
+        idle_game.pipe_manager.pipes.append(Pipe(x=0, gap_y=settings.BIRD_START_Y))
+        idle_game.update(DT)
+        assert idle_game.score == 0
+
+    def test_update_keeps_the_start_state(self, idle_game):
+        for _ in range(60):
+            idle_game.update(DT)
+        assert idle_game.state is GameState.START
+
+    def test_a_restarted_bird_out_of_bounds_does_not_end_the_round(self, idle_game):
+        idle_game.player.y = settings.GROUND_TOP
+        idle_game.update(DT)
+        assert idle_game.state is GameState.START
+
+
+class TestStartingTheGame:
+    def test_space_starts_the_game(self, idle_game):
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.state is GameState.PLAYING
+
+    def test_up_starts_the_game(self, idle_game):
+        press(idle_game, pygame.K_UP)
+        assert idle_game.state is GameState.PLAYING
+
+    def test_w_starts_the_game(self, idle_game):
+        press(idle_game, pygame.K_w)
+        assert idle_game.state is GameState.PLAYING
+
+    def test_left_click_starts_the_game(self, idle_game):
+        click(idle_game)
+        assert idle_game.state is GameState.PLAYING
+
+    def test_starting_resets_the_score(self, idle_game):
+        idle_game.score = 9
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.score == 0
+
+    def test_starting_keeps_the_high_score(self, idle_game):
+        idle_game.high_score = 12
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.high_score == 12
+
+    def test_starting_does_not_spawn_pipes_yet(self, idle_game):
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.pipes == []
+
+    def test_starting_begins_the_physics(self, idle_game):
+        press(idle_game, pygame.K_SPACE)
+        start_y = idle_game.player.y
+        for _ in range(5):
+            idle_game.update(DT)
+        assert idle_game.player.y != start_y
+
+    def test_starting_lifts_the_bird(self, idle_game):
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.player.velocity_y == settings.JUMP_VELOCITY
+
+    def test_starting_is_not_game_over(self, idle_game):
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.game_over is False
+
+    def test_r_key_also_starts_the_game(self, idle_game):
+        # R is the legacy global restart; from the attract screen a restart is
+        # simply a first start.
+        press(idle_game, pygame.K_r)
+        assert idle_game.state is GameState.PLAYING
+
+
+class TestPlayingState:
+    def test_state_is_playing(self, game):
+        assert game.state is GameState.PLAYING
+
+    def test_playing_input_flaps(self, game):
+        press(game, pygame.K_SPACE)
+        assert game.player.velocity_y == settings.JUMP_VELOCITY
+        assert game.has_flapped is True
+
+    def test_click_flaps_during_play(self, game):
+        click(game)
+        assert game.player.velocity_y == settings.JUMP_VELOCITY
+
+    def test_repeated_input_keeps_flapping(self, game):
+        for _ in range(3):
+            press(game, pygame.K_SPACE)
+            game.update(DT)
+        assert game.has_flapped is True
+
+    def test_pipes_move_during_play(self, game):
+        game.pipe_manager.spawn()
+        start_x = game.pipes[0].x
+        game.update(DT)
+        assert game.pipes[0].x < start_x
+
+    def test_scoring_still_works_during_play(self, game):
+        game.pipe_manager.pipes.append(Pipe(x=0, gap_y=settings.BIRD_START_Y))
+        game.update(DT)
+        assert game.score == 1
+
+
+class TestGameOverTransitions:
+    def test_pipe_collision_ends_the_round(self, game):
+        crash(game)
+        assert game.state is GameState.GAME_OVER
+        assert game.game_over is True
+
+    def test_ground_ends_the_round(self, game):
+        game.player.y = settings.GROUND_TOP - 1
+        game.update(DT)
+        assert game.state is GameState.GAME_OVER
+
+    def test_ceiling_ends_the_round(self, game):
+        game.player.y = 1
+        game.update(DT)
+        assert game.state is GameState.GAME_OVER
+
+    def test_game_over_award_nothing(self, game):
+        game.pipe_manager.pipes.extend(
+            [
+                Pipe(x=0, gap_y=settings.BIRD_START_Y),
+                Pipe(
+                    x=settings.BIRD_START_X - 10,
+                    gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
+                ),
+            ]
+        )
+        game.update(DT)
+        assert game.state is GameState.GAME_OVER
+        assert game.score == 0
+
+    def test_game_over_keeps_the_high_score(self, game):
+        game.add_score(4)
+        crash(game)
+        assert game.high_score == 4
+
+    def test_game_over_is_reported_by_the_flag(self, game):
+        crash(game)
+        assert game.game_over is True
+        assert game.state.is_over is True
+
+
+class TestGameOverIsFrozen:
+    def freeze(self, game: Game) -> tuple[float, float, int]:
+        crash(game)
+        assert game.state is GameState.GAME_OVER
+        return game.player.y, game.player.x, game.score
+
+    def test_the_bird_stops(self, game):
+        y, x, _ = self.freeze(game)
+        for _ in range(120):
+            game.update(DT)
+        assert game.player.y == y
+        assert game.player.x == x
+
+    def test_the_score_stops(self, game):
+        _, _, score = self.freeze(game)
+        for _ in range(120):
+            game.update(DT)
+        assert game.score == score
+
+    def test_no_new_pipes_spawn(self, game):
+        self.freeze(game)
+        # The pipe that caused the crash is still on screen; what matters is
+        # that a frozen world never spawns another one.
+        count = len(game.pipes)
+        for _ in range(600):
+            game.update(DT)
+        assert len(game.pipes) == count
+
+    def test_the_state_stays_game_over(self, game):
+        self.freeze(game)
+        for _ in range(60):
+            game.update(DT)
+        assert game.state is GameState.GAME_OVER
+
+    def test_input_does_not_flap_the_frozen_bird(self, game):
+        _, _, _ = self.freeze(game)
+        press(game, pygame.K_SPACE)
+        # The press restarts, so the bird is live again with a fresh lift.
+        assert game.state is GameState.PLAYING
+        assert game.player.velocity_y == settings.JUMP_VELOCITY
+
+
+class TestRestartFromGameOver:
+    @pytest.fixture()
+    def crashed(self, game):
+        game.add_score(5)
+        crash(game)
+        assert game.state is GameState.GAME_OVER
+        return game
+
+    def test_space_restarts(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.state is GameState.PLAYING
+
+    def test_up_restarts(self, crashed):
+        press(crashed, pygame.K_UP)
+        assert crashed.state is GameState.PLAYING
+
+    def test_w_restarts(self, crashed):
+        press(crashed, pygame.K_w)
+        assert crashed.state is GameState.PLAYING
+
+    def test_left_click_restarts(self, crashed):
+        click(crashed)
+        assert crashed.state is GameState.PLAYING
+
+    def test_r_key_still_restarts(self, crashed):
+        press(crashed, pygame.K_r)
+        assert crashed.state is GameState.PLAYING
+
+    def test_restart_clears_the_score(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.score == 0
+
+    def test_restart_preserves_the_high_score(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.high_score == 5
+
+    def test_restart_clears_the_pipes(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.pipes == []
+
+    def test_restart_resets_the_spawn_timer(self, crashed):
+        crashed.pipe_manager.elapsed = 1.0
+        press(crashed, pygame.K_SPACE)
+        assert crashed.pipe_manager.elapsed == 0.0
+
+    def test_restart_resets_the_player(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.player.position == (
+            settings.BIRD_START_X,
+            settings.BIRD_START_Y,
+        )
+
+    def test_restart_press_also_lifts_the_bird(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.has_flapped is True
+        assert crashed.player.velocity_y == settings.JUMP_VELOCITY
+
+    def test_restart_clears_the_game_over_flag(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        assert crashed.game_over is False
+
+    def test_a_new_pipe_can_score_again_after_restart(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        crashed.pipe_manager.pipes.append(Pipe(x=0, gap_y=settings.BIRD_START_Y))
+        crashed.update(DT)
+        assert crashed.score == 1
+        assert crashed.high_score == 5
+
+    def test_restart_does_not_leak_a_saved_pipe(self, crashed):
+        press(crashed, pygame.K_SPACE)
+        for _ in range(600):
+            if crashed.player.y > settings.BIRD_START_Y:
+                crashed.flap()
+            crashed.update(DT)
+        assert crashed.score >= 0
+        assert all(not pipe.scored for pipe in crashed.pipes)
+
+
+class TestResetSemantics:
+    def test_reset_round_clears_everything_round_scoped(self, game):
+        game.add_score(6)
+        game.pipe_manager.spawn()
+        game.pipe_manager.elapsed = 0.7
+        game.reset_round()
+        assert game.score == 0
+        assert game.pipes == []
+        assert game.pipe_manager.elapsed == 0.0
+        assert game.player.position == (settings.BIRD_START_X, settings.BIRD_START_Y)
+        assert game.has_flapped is False
+
+    def test_reset_round_keeps_the_high_score(self, game):
+        game.add_score(6)
+        game.reset_round()
+        assert game.high_score == 6
+
+    def test_reset_round_enters_playing(self, game):
+        crash(game)
+        game.reset_round()
+        assert game.state is GameState.PLAYING
+
+    def test_start_round_uses_reset_round(self, game):
+        game.add_score(3)
+        game.start_round()
+        assert game.state is GameState.PLAYING
+        assert game.score == 0
+        assert game.high_score == 3
+
+    def test_start_round_from_start(self, idle_game):
+        idle_game.start_round()
+        assert idle_game.state is GameState.PLAYING
+        assert idle_game.score == 0
+
+    def test_high_score_survives_many_rounds(self, game):
+        game.add_score(7)
+        for _ in range(5):
+            crash(game)
+            game.start_round()
+        assert game.high_score == 7
+        assert game.score == 0
+
+
+class TestGameOverCompatibility:
+    def test_flag_reads_the_state(self, game):
+        assert game.game_over is False
+        game.state = GameState.GAME_OVER
+        assert game.game_over is True
+
+    def test_setting_the_flag_sets_the_state(self, game):
+        game.game_over = True
+        assert game.state is GameState.GAME_OVER
+
+    def test_clearing_the_flag_leaves_game_over(self, game):
+        game.game_over = False
+        assert game.state is GameState.PLAYING
+
+    def test_state_is_the_source_of_truth(self, game):
+        game.state = GameState.START
+        assert game.game_over is False
+
+
+class TestStateInput:
+    def test_right_mouse_is_ignored_in_start(self, idle_game):
+        click(idle_game, button=3)
+        assert idle_game.state is GameState.START
+        assert idle_game.has_flapped is False
+
+    def test_right_mouse_is_ignored_in_playing(self, game):
+        click(game, button=3)
+        assert game.has_flapped is False
+        assert game.state is GameState.PLAYING
+
+    def test_right_mouse_does_not_restart(self, game):
+        crash(game)
+        click(game, button=3)
+        assert game.state is GameState.GAME_OVER
+
+    def test_middle_mouse_is_ignored_in_start(self, idle_game):
+        click(idle_game, button=2)
+        assert idle_game.state is GameState.START
+
+    def test_middle_mouse_is_ignored_in_playing(self, game):
+        click(game, button=2)
+        assert game.has_flapped is False
+
+    @pytest.mark.parametrize("key", [pygame.K_SPACE, pygame.K_UP, pygame.K_w])
+    def test_flap_keys_all_work(self, game, key):
+        press(game, key)
+        assert game.has_flapped is True
+
+    @pytest.mark.parametrize(
+        "state", [GameState.START, GameState.PLAYING, GameState.GAME_OVER]
+    )
+    def test_escape_quits_from_every_state(self, game, state):
+        game.state = state
+        game.running = True
+        press(game, pygame.K_ESCAPE)
+        assert game.running is False
+
+    def test_escape_does_not_change_the_state(self, game):
+        game.running = True
+        press(game, pygame.K_ESCAPE)
+        assert game.state is GameState.PLAYING
+
+    def test_quit_event_stops_the_game(self, game):
+        game.running = True
+        post_event(pygame.QUIT)
+        game.handle_events()
+        assert game.running is False
+
+    def test_unrelated_key_does_nothing(self, game):
+        press(game, pygame.K_z)
+        assert game.has_flapped is False
+        assert game.state is GameState.PLAYING
+
+
+class TestStateRendering:
+    def test_start_screen_renders(self, idle_game):
+        idle_game.render()
+        assert idle_game.screen.get_size() == (
+            settings.SCREEN_WIDTH,
+            settings.SCREEN_HEIGHT,
+        )
+
+    def test_playing_screen_renders(self, game):
+        game.render()
+
+    def test_game_over_screen_renders(self, game):
+        crash(game)
+        game.render()
+
+    def test_each_state_renders_a_different_screen(self, game):
+        playing = snapshot(game)
+        game.state = GameState.GAME_OVER
+        over = snapshot(game)
+        game.state = GameState.START
+        start = snapshot(game)
+        assert len({playing, over, start}) == 3
+
+    def test_bird_is_visible_on_the_start_screen(self, idle_game):
+        idle_game.render()
+        assert contains_color(idle_game.screen, settings.BIRD_COLOR)
+
+    def test_bird_is_visible_while_playing(self, game):
+        game.render()
+        assert contains_color(game.screen, settings.BIRD_COLOR)
+
+    def test_bird_is_visible_on_the_game_over_screen(self, game):
+        crash(game)
+        game.render()
+        assert contains_color(game.screen, settings.BIRD_COLOR)
+
+    def test_ground_is_drawn_in_every_state(self, game):
+        for state in GameState:
+            game.state = state
+            game.render()
+            pixel = game.screen.get_at(
+                (settings.SCREEN_WIDTH // 2, settings.GROUND_TOP + 5)
+            )
+            assert pixel[:3] == settings.GROUND_COLOR
+
+    def test_start_screen_shows_no_score(self, idle_game):
+        idle_game.render()
+        before = pygame.image.tostring(idle_game.screen, "RGB")
+        idle_game.score = 99
+        idle_game.high_score = 99
+        idle_game.render()
+        assert pygame.image.tostring(idle_game.screen, "RGB") == before
+
+    def test_playing_score_is_rendered(self, game):
+        idle = snapshot(game)
+        game.score = 1234
+        assert snapshot(game) != idle
+
+    def test_game_over_shows_score_and_best(self, game):
+        game.state = GameState.GAME_OVER
+        game.score = 4
+        game.high_score = 9
+        with_values = snapshot(game)
+        game.score = 4
+        game.high_score = 10
+        assert snapshot(game) != with_values
+
+    def test_game_over_score_reflects_the_score(self, game):
+        game.state = GameState.GAME_OVER
+        game.score = 1
+        game.high_score = 1
+        first = snapshot(game)
+        game.score = 8
+        assert snapshot(game) != first
+
+    def test_pipes_are_drawn_while_playing(self, game):
+        game.pipe_manager.spawn()
+        # A fresh pipe spawns just off the right edge, so move it into view.
+        game.pipes[0].x = 200
+        game.render()
+        assert contains_color(game.screen, settings.PIPE_COLOR)
+
+    def test_render_does_not_change_the_state(self, game):
+        for state in GameState:
+            game.state = state
+            game.render()
+            assert game.state is state
+
+    def test_render_works_in_every_state_from_a_new_game(self, idle_game):
+        for state in GameState:
+            idle_game.state = state
+            idle_game.render()
+
+
+class TestStateLoopIntegration:
+    def test_bounded_run_from_start(self, idle_game):
+        idle_game.run(max_frames=5)
+        assert idle_game.running is False
+
+    def test_run_from_start_leaves_the_world_alone(self, idle_game):
+        idle_game.run(max_frames=5)
+        assert idle_game.player.y == float(settings.BIRD_START_Y)
+        assert idle_game.pipes == []
+
+    def test_run_stays_frozen_after_a_crash(self, game):
+        crash(game)
+        frozen_x = game.pipes[0].x
+        game.run(max_frames=3)
+        assert game.state is GameState.GAME_OVER
+        assert game.pipes[0].x == frozen_x
 
 
 def test_clamp_bounds_values():

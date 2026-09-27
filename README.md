@@ -5,10 +5,10 @@ A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 Current status: the window, main loop, input handling, the bird's physics
 (float position, gravity, flap, ceiling/ground detection), procedurally spawned
 pipes (randomized gaps, timed spawning, off-screen recycling), bird/pipe
-collision detection and scoring (one point per passed pipe plus a session high
-score) are implemented. Graphics are drawn with plain Pygame shapes — no
-external image or audio assets. Sounds and menus are intentionally left for
-later phases.
+collision detection, scoring (one point per passed pipe plus a session high
+score) and an explicit start/play/game-over state machine are implemented.
+Graphics are drawn with plain Pygame shapes and the built-in font — no external
+image or audio assets. Sounds are intentionally left for a later phase.
 
 ## Requirements
 
@@ -51,12 +51,14 @@ $env:PYTHONPATH = "src"; python main.py
 
 ### Controls
 
-| Key                | Action        |
-| ------------------ | ------------- |
-| `Space`/`Up`/`W`   | Flap upwards  |
-| Left mouse click   | Flap upwards  |
-| `R`                | Restart       |
-| `Esc`              | Quit          |
+| Key                | Action                                    |
+| ------------------ | ----------------------------------------- |
+| `Space`/`Up`/`W`   | Start, flap, or restart                   |
+| Left mouse click   | Start, flap, or restart                   |
+| `R`                | Restart                                   |
+| `Esc`              | Quit                                      |
+
+Right and middle mouse buttons are ignored in every state.
 
 ## Physics
 
@@ -74,7 +76,69 @@ identical at any frame rate. The tunables live in `src/flappy_bird/settings.py`:
 
 A flap **assigns** `velocity_y` instead of adding to it, so mashing the key can
 never build up a runaway speed. The player exposes `hit_ceiling` and
-`hit_ground`; `Game.update` latches `game_over` when either becomes true.
+`hit_ground`.
+
+## Game states
+
+`state.py` defines the whole lifecycle as one enum:
+
+```python
+GameState.START      # attract screen, frozen world
+GameState.PLAYING    # the live round
+GameState.GAME_OVER  # round ended, frozen world
+```
+
+`Game.state` is the single source of truth. It drives three decisions — whether
+`update()` simulates, what a press of the flap key means, and which screen gets
+drawn:
+
+| From        | Input                             | Result                             |
+| ----------- | --------------------------------- | ---------------------------------- |
+| `START`     | `Space` / `Up` / `W` / left click | `PLAYING`                          |
+| `PLAYING`   | `Space` / `Up` / `W` / left click | flap the bird                      |
+| `PLAYING`   | pipe hit, ceiling or ground       | `GAME_OVER`                        |
+| `GAME_OVER` | `Space` / `Up` / `W` / left click | `PLAYING` with the score back to 0 |
+| any         | `Esc`                             | quit                               |
+
+There is no Start or Restart button: the same press that starts the game also
+lifts the bird, so the player never has to click twice to get off the ground.
+`R` still restarts from anywhere, as before.
+
+Only `PLAYING` advances the simulation, so `START` and `GAME_OVER` are frozen
+worlds by construction rather than by scattered flags: no physics, no pipe
+movement, no spawning and no scoring can happen outside a live round. A new
+`Game` begins in `START` with `score = 0` and `high_score = 0`.
+
+`Game.game_over` is kept as a read/write property over `state` for
+compatibility, but nothing in the game reads it any more.
+
+### Reset semantics
+
+Two methods keep "what a round owns" separate from "what a session owns":
+
+- `reset_round()` — player, pipes, spawn timer, `score` and the per-pipe
+  scoring flags (which go away with the pipes that carried them), then
+  `state = PLAYING`.
+- `start_round()` — the public entry point for a start/restart press; it calls
+  `reset_round()`.
+
+`high_score` is **not** touched by either, so the best of the session survives
+every restart. Only a brand-new `Game` instance starts it back at zero.
+
+### Screens
+
+`render()` draws the shared world and then dispatches to one small method per
+state, so no single method grows a nest of conditionals:
+
+| Method                  | Draws                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| `render_world()`        | background, pipes, bird, ground (shared by every state)     |
+| `render_start_screen()` | `FLAPPY BIRD` + `Press SPACE or Click to Start`             |
+| `render_playing()`      | the running `Score: N`                                      |
+| `render_game_over()`    | `GAME OVER`, `Score: N`, `Best: N`, `Press SPACE or Click to Restart` |
+
+The bird and the world stay visible underneath the panels, and every panel is
+sized to its own text and centred, so the prompts never overlap the score.
 
 ## Collision
 
@@ -95,9 +159,9 @@ collide, so a hitbox resting exactly against a pipe edge still passes while one
 pixel of penetration does not.
 
 `Game.update` checks the player against the current pipes after both systems
-have moved, and latches `game_over` on a hit — exactly as it already did for the
-ceiling and the ground. While `game_over` is set, no further updates run, so the
-bird and the pipes freeze where they collided.
+have moved, and moves to `GAME_OVER` on a hit — exactly as it already did for
+the ceiling and the ground. While the state is `GAME_OVER`, no further updates
+run, so the bird and the pipes freeze where they collided.
 
 ## Pipes
 
@@ -156,13 +220,13 @@ is gone before it can be counted twice.
 `Game.update(dt)` orders its checks deliberately:
 
 1. `player.update(dt)` and `pipe_manager.update(dt)` move the world,
-2. the ceiling/ground and pipe collision tests run — on a hit, `game_over` is
-   latched and the method **returns immediately**,
+2. the ceiling/ground and pipe collision tests run — on a hit, the state becomes
+   `GAME_OVER` and the method **returns immediately**,
 3. only then does the game award newly passed pipes.
 
 Because scoring is the last step, a crash on the same frame the bird clears a
-pipe still pays nothing, while `game_over` freezes `score` until the next
-`restart()`.
+pipe still pays nothing, and the `GAME_OVER` state freezes `score` until the
+next `start_round()`.
 
 `Game.score` is the running score and `Game.high_score` the best of the current
 process; both start at 0 and are plain writable attributes. `Game.add_score`
@@ -171,7 +235,7 @@ is the only mutator, and it raises the high score with `max()`. A restart clears
 brand-new `Game` starts both counters from zero again.
 
 The score is drawn with the built-in Pygame font at the top centre as
-`Score: N`; after a game over a `Best: N` line appears underneath it.
+`Score: N`; the game-over panel repeats it next to the `Best: N` line.
 
 ## Run the tests
 
@@ -182,8 +246,14 @@ python -m pytest
 The tests default to Pygame's headless `dummy` video driver, so they pass
 without a display. They cover the settings and window configuration, the
 player's gravity/jump behaviour, pipe geometry and spawning, every collision
-edge case, the scoring rule (including exactly-once and the crash frame) and
-the high-score lifecycle across restarts.
+edge case, the scoring rule (including exactly-once and the crash frame), the
+high-score lifecycle across restarts, and the state machine: the three states
+and their transitions, that a frozen state really is frozen, per-key and
+per-button input in every state, and each screen rendering the right text.
+
+Two fixtures model the two situations: `game` is a round already in progress
+(what the gameplay tests drive), and `idle_game` is a fresh instance still
+waiting in `START`.
 
 ## Project structure
 
@@ -202,6 +272,7 @@ flappy_bird/
 │       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
 │       ├── collision.py         # bird/pipe hit tests
 │       ├── scoring.py           # counts pipes passed exactly once
+│       ├── state.py             # GameState: the start/play/game-over lifecycle
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
@@ -219,6 +290,8 @@ flappy_bird/
   testable without a window.
 - `scoring.py` owns the payout rule; it reads and flips each pipe's own `scored`
   flag, so "one point per pipe" cannot drift from the pipe objects themselves.
+- `state.py` owns the lifecycle vocabulary, so nothing else has to invent a
+  string or a boolean to mean "the round is over".
 - `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`,
   asks `collision` whether the bird hit anything, awards what `scoring` reports
   and draws what the manager holds. `Game.pipes` is a read-only view of the

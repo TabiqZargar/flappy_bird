@@ -7,10 +7,12 @@ from .pipe import Pipe
 from .pipe_manager import PipeManager
 from .player import Player
 from .scoring import count_newly_passed
+from .state import GameState
 from .utils import clamp, centered_rect, frame_delta, random_gap_center
 
 __all__ = [
     "Game",
+    "GameState",
     "Pipe",
     "PipeManager",
     "Player",
