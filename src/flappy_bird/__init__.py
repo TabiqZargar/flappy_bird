@@ -3,12 +3,14 @@
 from . import settings
 from .game import Game
 from .pipe import Pipe
+from .pipe_manager import PipeManager
 from .player import Player
 from .utils import clamp, centered_rect, frame_delta, random_gap_center
 
 __all__ = [
     "Game",
     "Pipe",
+    "PipeManager",
     "Player",
     "settings",
     "clamp",

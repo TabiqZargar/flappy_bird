@@ -1,7 +1,6 @@
-"""Pipe entity placeholder.
+"""Pipe entity: gap geometry, horizontal movement and drawing.
 
-Generation, spacing and scoring live here for later; the current version only
-handles geometry, horizontal movement and drawing.
+Spawning and lifetime are owned by :class:`~flappy_bird.pipe_manager.PipeManager`.
 """
 
 from __future__ import annotations
@@ -19,8 +18,9 @@ class Pipe:
         x: float,
         gap_y: int,
         width: int = settings.PIPE_WIDTH,
-        gap: int = settings.PIPE_GAP,
-        height: int = settings.SCREEN_HEIGHT,
+        gap: int = settings.PIPE_GAP_SIZE,
+        top_y: int = settings.CEILING_Y,
+        bottom_y: int = settings.GROUND_TOP,
         speed: float = settings.PIPE_SPEED,
         color: tuple[int, int, int] = settings.PIPE_COLOR,
     ) -> None:
@@ -28,7 +28,8 @@ class Pipe:
         self.gap_y = int(gap_y)
         self.width = width
         self.gap = gap
-        self.height = height
+        self.top_y = top_y
+        self.bottom_y = bottom_y
         self.speed = speed
         self.color = color
         self.scored = False
@@ -36,16 +37,31 @@ class Pipe:
     # --- Geometry ------------------------------------------------------------
 
     @property
+    def gap_top(self) -> int:
+        return self.gap_y - self.gap // 2
+
+    @property
+    def gap_bottom(self) -> int:
+        return self.gap_y + self.gap // 2
+
+    @property
     def top_rect(self) -> pygame.Rect:
-        top_height = self.gap_y - self.gap // 2
-        return pygame.Rect(round(self.x), 0, self.width, max(top_height, 0))
+        """Column running from the top of the playable area to the gap."""
+        return pygame.Rect(
+            round(self.x),
+            self.top_y,
+            self.width,
+            max(self.gap_top - self.top_y, 0),
+        )
 
     @property
     def bottom_rect(self) -> pygame.Rect:
-        top_height = self.gap_y - self.gap // 2
-        bottom_y = top_height + self.gap
+        """Column running from the gap down to the ground."""
         return pygame.Rect(
-            round(self.x), bottom_y, self.width, max(self.height - bottom_y, 0)
+            round(self.x),
+            self.gap_bottom,
+            self.width,
+            max(self.bottom_y - self.gap_bottom, 0),
         )
 
     @property

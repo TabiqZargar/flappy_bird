@@ -8,6 +8,7 @@ import pygame
 
 from . import settings
 from .pipe import Pipe
+from .pipe_manager import PipeManager
 from .player import Player
 from .utils import centered_rect, frame_delta
 
@@ -30,11 +31,16 @@ class Game:
         self.banner_font = pygame.font.Font(None, settings.BANNER_FONT_SIZE)
 
         self.player = Player()
-        self.pipes: list[Pipe] = []
+        self.pipe_manager = PipeManager()
         self.score = 0
         self.running = False
         self.game_over = False
         self.has_flapped = False
+
+    @property
+    def pipes(self) -> list[Pipe]:
+        """Live list of active pipes, owned by the pipe manager."""
+        return self.pipe_manager.pipes
 
     # --- Lifecycle -----------------------------------------------------------
 
@@ -58,7 +64,7 @@ class Game:
 
     def restart(self) -> None:
         self.player.reset()
-        self.pipes.clear()
+        self.pipe_manager.reset()
         self.score = 0
         self.game_over = False
         self.has_flapped = False
@@ -94,9 +100,7 @@ class Game:
             return
 
         self.player.update(dt)
-        for pipe in self.pipes:
-            pipe.update(dt)
-        self.pipes = [pipe for pipe in self.pipes if not pipe.is_off_screen]
+        self.pipe_manager.update(dt)
 
         if self.player.hit_ceiling or self.player.hit_ground:
             self.game_over = True

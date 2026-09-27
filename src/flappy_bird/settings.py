@@ -34,11 +34,13 @@ GROUND_TOP = SCREEN_HEIGHT - GROUND_HEIGHT
 # --- Pipes ------------------------------------------------------------------
 
 PIPE_WIDTH = 60
-PIPE_GAP = 160
+PIPE_GAP_SIZE = 160
+PIPE_MIN_GAP_CENTER = 160
+PIPE_MAX_GAP_CENTER = 540
 PIPE_SPEED = 120.0
+PIPE_SPAWN_INTERVAL = 1.6
 PIPE_COLOR = (34, 177, 76)
 PIPE_EDGE_COLOR = (20, 105, 45)
-PIPE_MIN_EDGE = 60
 
 # --- Presentation -----------------------------------------------------------
 

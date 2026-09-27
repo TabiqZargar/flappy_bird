@@ -1,11 +1,14 @@
 """Sanity checks for settings, window configuration, player physics and input."""
 
+import random
+
 import pygame
 import pytest
 
 from flappy_bird import settings
 from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
+from flappy_bird.pipe_manager import PipeManager
 from flappy_bird.player import Player
 from flappy_bird.utils import clamp, random_gap_center
 
@@ -30,6 +33,21 @@ def simulate(seconds: float, dt: float) -> Player:
     for _ in range(round(seconds / dt)):
         player.update(dt)
     return player
+
+
+def advance(game: Game, seconds: float, dt: float = DT, render: bool = False) -> None:
+    """Step the game for ``seconds`` of game time, keeping the bird alive.
+
+    Flapping only when the bird sinks below its start height holds a steady
+    altitude, so the run never ends on game over and the pipe system keeps
+    advancing.
+    """
+    for _ in range(round(seconds / dt)):
+        if game.player.y > settings.BIRD_START_Y:
+            game.flap()
+        game.update(dt)
+        if render:
+            game.render()
 
 
 class TestSettings:
@@ -61,7 +79,22 @@ class TestSettings:
     def test_pipe_gap_leaves_room_for_pipes(self):
         assert settings.PIPE_WIDTH > 0
         assert settings.PIPE_SPEED > 0
-        assert settings.PIPE_GAP + 2 * settings.PIPE_MIN_EDGE <= settings.SCREEN_HEIGHT
+        assert settings.PIPE_GAP_SIZE > 0
+        assert settings.PIPE_SPAWN_INTERVAL > 0
+
+    def test_gap_centers_are_configured_sensibly(self):
+        assert (
+            settings.PIPE_MIN_GAP_CENTER
+            <= settings.PIPE_MAX_GAP_CENTER
+            < settings.GROUND_TOP
+        )
+        half_gap = settings.PIPE_GAP_SIZE // 2
+        assert settings.PIPE_MIN_GAP_CENTER - half_gap >= settings.CEILING_Y
+        assert settings.PIPE_MAX_GAP_CENTER + half_gap <= settings.GROUND_TOP
+
+    def test_pipe_spacing_leaves_a_reachable_gap(self):
+        spacing = settings.PIPE_SPAWN_INTERVAL * settings.PIPE_SPEED
+        assert spacing > settings.PIPE_GAP_SIZE
 
 
 class TestPlayerPhysics:
@@ -275,22 +308,231 @@ class TestGameLoopIntegration:
 
 
 class TestPipe:
-    def test_gap_is_centred_and_moves_left(self):
-        pipe = Pipe(x=settings.SCREEN_WIDTH, gap_y=350)
+    def test_initial_state(self):
+        pipe = Pipe(x=400, gap_y=350)
+        assert pipe.x == 400.0
+        assert pipe.gap_y == 350
+        assert pipe.width == settings.PIPE_WIDTH
+        assert pipe.gap == settings.PIPE_GAP_SIZE
+        assert pipe.speed == settings.PIPE_SPEED
+        assert pipe.is_off_screen is False
+
+    def test_top_rect_spans_ceiling_to_gap(self):
+        pipe = Pipe(x=100, gap_y=350)
+        top = pipe.top_rect
+        assert top.topleft == (100, settings.CEILING_Y)
+        assert top.width == settings.PIPE_WIDTH
+        assert top.bottom == pipe.gap_top
+
+    def test_bottom_rect_spans_gap_to_ground(self):
+        pipe = Pipe(x=100, gap_y=350)
+        bottom = pipe.bottom_rect
+        assert bottom.topleft == (100, pipe.gap_bottom)
+        assert bottom.width == settings.PIPE_WIDTH
+        assert bottom.bottom == settings.GROUND_TOP
+
+    def test_gap_matches_configured_size(self):
+        pipe = Pipe(x=100, gap_y=350)
         top, bottom = pipe.rects
-        assert top.height + settings.PIPE_GAP + bottom.height == settings.SCREEN_HEIGHT
-        assert bottom.top == top.bottom + settings.PIPE_GAP
+        assert top.height + settings.PIPE_GAP_SIZE + bottom.height == (
+            settings.GROUND_TOP - settings.CEILING_Y
+        )
+        assert bottom.top == top.bottom + settings.PIPE_GAP_SIZE
 
-        start_x = pipe.x
+    def test_gap_stays_inside_playable_area_at_extremes(self):
+        for center in (settings.PIPE_MIN_GAP_CENTER, settings.PIPE_MAX_GAP_CENTER):
+            pipe = Pipe(x=100, gap_y=center)
+            top, bottom = pipe.rects
+            assert top.height > 0
+            assert bottom.height > 0
+
+    def test_moves_left_with_dt(self):
+        pipe = Pipe(x=400, gap_y=350)
         pipe.update(0.5)
-        assert pipe.x == pytest.approx(start_x - settings.PIPE_SPEED * 0.5)
+        assert pipe.x == pytest.approx(400 - settings.PIPE_SPEED * 0.5)
 
-    def test_random_gap_center_stays_on_screen(self):
-        for _ in range(50):
-            center = random_gap_center()
-            half_gap = settings.PIPE_GAP // 2
-            assert settings.PIPE_MIN_EDGE <= center - half_gap
-            assert center + half_gap <= settings.SCREEN_HEIGHT - settings.PIPE_MIN_EDGE
+    def test_movement_is_frame_rate_independent(self):
+        coarse = Pipe(x=400, gap_y=350)
+        fine = Pipe(x=400, gap_y=350)
+        for _ in range(30):
+            coarse.update(1 / 30)
+        for _ in range(120):
+            fine.update(1 / 120)
+        assert fine.x == pytest.approx(coarse.x, rel=1e-9)
+
+    def test_off_screen_detection(self):
+        pipe = Pipe(x=0, gap_y=350)
+        assert pipe.is_off_screen is False
+        pipe.x = -settings.PIPE_WIDTH
+        assert pipe.is_off_screen is True
+
+    def test_has_behind(self):
+        pipe = Pipe(x=200, gap_y=350)
+        assert pipe.has_behind(100) is False
+        assert pipe.has_behind(200 + settings.PIPE_WIDTH + 1) is True
+
+
+class TestPipeManager:
+    def test_initial_state(self):
+        manager = PipeManager()
+        assert manager.pipes == []
+        assert len(manager) == 0
+        assert manager.elapsed == 0.0
+        assert manager.spawn_interval == settings.PIPE_SPAWN_INTERVAL
+
+    def test_rejects_non_positive_interval(self):
+        with pytest.raises(ValueError):
+            PipeManager(spawn_interval=0)
+
+    def test_no_spawn_before_interval_elapses(self):
+        manager = PipeManager()
+        manager.update(1.0)
+        assert manager.pipes == []
+        assert manager.next_spawn_in == pytest.approx(0.6)
+
+    def test_spawns_after_interval(self):
+        manager = PipeManager()
+        manager.update(1.0)
+        manager.update(0.7)
+        assert len(manager.pipes) == 1
+        assert manager.elapsed == pytest.approx(0.1)
+
+    def test_pipe_is_created_at_the_right_edge(self):
+        manager = PipeManager()
+        pipe = manager.spawn()
+        assert pipe.x == settings.SCREEN_WIDTH
+        assert pipe.speed == settings.PIPE_SPEED
+        assert pipe.gap == settings.PIPE_GAP_SIZE
+        assert manager.pipes == [pipe]
+
+    def test_spawned_gap_is_within_configured_limits(self):
+        manager = PipeManager(rng=random.Random(7))
+        for _ in range(200):
+            center = manager.spawn().gap_y
+            assert settings.PIPE_MIN_GAP_CENTER <= center
+            assert center <= settings.PIPE_MAX_GAP_CENTER
+
+    def test_random_gap_center_is_randomised(self):
+        rng = random.Random(1234)
+        centers = {
+            random_gap_center(min_center=100, max_center=600, rng=rng)
+            for _ in range(50)
+        }
+        assert len(centers) > 10
+
+    def test_random_gap_center_never_leaves_playable_area(self):
+        rng = random.Random(99)
+        half_gap = settings.PIPE_GAP_SIZE // 2
+        for _ in range(200):
+            center = random_gap_center(rng=rng)
+            assert center - half_gap >= settings.CEILING_Y
+            assert center + half_gap <= settings.GROUND_TOP
+
+    def test_random_gap_center_rejects_impossible_ranges(self):
+        with pytest.raises(ValueError):
+            random_gap_center(min_center=650, max_center=660)
+
+    def test_multiple_pipes_coexist(self):
+        manager = PipeManager()
+        for _ in range(100):
+            manager.update(0.1)
+        assert len(manager.pipes) >= 2
+        assert len({id(pipe) for pipe in manager.pipes}) == len(manager.pipes)
+
+    def test_pipes_move_left(self):
+        manager = PipeManager()
+        manager.spawn()
+        pipe = manager.pipes[0]
+        start_x = pipe.x
+        manager.update(0.1)
+        assert pipe.x == pytest.approx(start_x - settings.PIPE_SPEED * 0.1)
+
+    def test_spawning_is_frame_rate_independent(self):
+        coarse = PipeManager()
+        fine = PipeManager()
+        for _ in range(120):
+            coarse.update(1 / 30)
+        for _ in range(480):
+            fine.update(1 / 120)
+        assert len(coarse.pipes) == len(fine.pipes) == 2
+        # Spawns land on a frame boundary, so positions may differ by the
+        # distance covered in one coarse frame.
+        assert [pipe.x for pipe in coarse.pipes] == pytest.approx(
+            [pipe.x for pipe in fine.pipes], abs=settings.PIPE_SPEED / 30
+        )
+
+    def test_off_screen_pipes_are_removed(self):
+        manager = PipeManager()
+        pipe = manager.spawn()
+        pipe.x = -settings.PIPE_WIDTH
+        manager.update(0.016)
+        assert manager.pipes == []
+
+    def test_large_dt_does_not_flood_the_screen(self):
+        manager = PipeManager()
+        spawned = manager.update(30.0)
+        assert spawned == PipeManager.MAX_SPAWNS_PER_UPDATE
+        assert len(manager.pipes) == PipeManager.MAX_SPAWNS_PER_UPDATE
+
+    def test_large_dt_does_not_run_the_timer_away(self):
+        manager = PipeManager()
+        manager.update(30.0)
+        assert manager.elapsed < manager.spawn_interval
+
+    def test_large_dt_keeps_spawning_predictable(self):
+        first = PipeManager(rng=random.Random(3))
+        second = PipeManager(rng=random.Random(3))
+        first.update(30.0)
+        second.update(30.0)
+        assert [pipe.gap_y for pipe in first.pipes] == [
+            pipe.gap_y for pipe in second.pipes
+        ]
+
+    def test_reset_clears_pipes_and_timer(self):
+        manager = PipeManager()
+        for _ in range(100):
+            manager.update(0.1)
+        assert manager.pipes
+        manager.reset()
+        assert manager.pipes == []
+        assert manager.elapsed == 0.0
+        assert manager.next_spawn_in == manager.spawn_interval
+
+
+class TestGamePipes:
+    def test_game_spawns_pipes_over_time(self, game):
+        advance(game, 2.0)
+        assert len(game.pipes) >= 1
+        assert all(isinstance(pipe, Pipe) for pipe in game.pipes)
+
+    def test_game_pipes_move_left(self, game):
+        advance(game, 1.8)
+        first = game.pipes[0]
+        start_x = first.x
+        advance(game, 0.2)
+        assert first.x < start_x
+
+    def test_spawned_pipes_sit_inside_the_playable_area(self, game):
+        advance(game, 4.0)
+        for pipe in game.pipes:
+            top, bottom = pipe.rects
+            assert top.height > 0
+            assert bottom.bottom <= settings.GROUND_TOP
+
+    def test_restart_clears_pipes_and_timer(self, game):
+        advance(game, 2.0)
+        assert game.pipes
+        game.restart()
+        assert game.pipes == []
+        assert game.pipe_manager.elapsed == 0.0
+        assert game.player.position == (
+            settings.BIRD_START_X,
+            settings.BIRD_START_Y,
+        )
+
+    def test_rendering_with_pipes_does_not_raise(self, game):
+        advance(game, 2.5, render=True)
+        assert game.pipes
 
 
 def test_clamp_bounds_values():

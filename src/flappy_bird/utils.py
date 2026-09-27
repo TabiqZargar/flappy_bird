@@ -20,16 +20,21 @@ def frame_delta(clock, fps: int = settings.FPS) -> float:
 
 
 def random_gap_center(
-    gap: int = settings.PIPE_GAP,
-    screen_height: int = settings.SCREEN_HEIGHT,
-    min_edge: int = settings.PIPE_MIN_EDGE,
+    gap: int = settings.PIPE_GAP_SIZE,
+    min_center: int = settings.PIPE_MIN_GAP_CENTER,
+    max_center: int = settings.PIPE_MAX_GAP_CENTER,
     rng: random.Random | None = None,
 ) -> int:
-    """Pick a random vertical center for a pipe gap that stays fully on screen."""
-    lowest = min_edge + gap // 2
-    highest = screen_height - min_edge - gap // 2
+    """Pick a random gap center between ``min_center`` and ``max_center``.
+
+    The requested range is narrowed further when needed so the whole gap always
+    fits between the ceiling and the ground.
+    """
+    half_gap = gap // 2
+    lowest = max(min_center, settings.CEILING_Y + half_gap)
+    highest = min(max_center, settings.GROUND_TOP - half_gap)
     if lowest > highest:
-        raise ValueError("pipe gap does not fit on screen")
+        raise ValueError("no room for a pipe gap within the requested range")
     return (rng or random).randint(lowest, highest)
 
 

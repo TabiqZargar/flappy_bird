@@ -2,10 +2,11 @@
 
 A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 
-Current status: the window, main loop, input handling and the bird's physics
-(float position, gravity, flap, ceiling/ground detection) are implemented.
-Graphics are drawn with plain Pygame shapes — no external image or audio
-assets. Pipe spawning, collision, scoring, sounds and menus are intentionally
+Current status: the window, main loop, input handling, the bird's physics
+(float position, gravity, flap, ceiling/ground detection) and procedurally
+spawned pipes (randomized gaps, timed spawning, off-screen recycling) are
+implemented. Graphics are drawn with plain Pygame shapes — no external image or
+audio assets. Pipe/player collision, scoring, sounds and menus are intentionally
 left for later phases.
 
 ## Requirements
@@ -74,6 +75,37 @@ A flap **assigns** `velocity_y` instead of adding to it, so mashing the key can
 never build up a runaway speed. The player exposes `hit_ceiling` and
 `hit_ground`; `Game.update` latches `game_over` when either becomes true.
 
+## Pipes
+
+`PipeManager` owns spawning, timing and recycling; `Pipe` owns only its own
+geometry and horizontal movement. Every manager tick:
+
+1. moves each pipe left by `speed * dt`,
+2. drops the pipes that are completely off-screen (via a new list, never while
+   iterating the live one),
+3. emits any pipe the spawn timer owes.
+
+| Constant                 | Value  | Meaning                                    |
+| ------------------------ | ------ | ------------------------------------------ |
+| `PIPE_SPEED`             | `120.0`| Horizontal speed in px/s                   |
+| `PIPE_SPAWN_INTERVAL`    | `1.6`  | Seconds between pipes                      |
+| `PIPE_GAP_SIZE`          | `160`  | Height of the passable gap in px           |
+| `PIPE_MIN_GAP_CENTER`    | `160`  | Lowest allowed gap center                  |
+| `PIPE_MAX_GAP_CENTER`    | `540`  | Highest allowed gap center                 |
+| `PIPE_WIDTH`             | `60`   | Width of one pipe column in px             |
+
+`PIPE_SPAWN_INTERVAL * PIPE_SPEED` (192 px) is the distance between consecutive
+pipes, so the gap always stays reachable.
+
+Gap centers come from `utils.random_gap_center`, which narrows the configured
+range further if needed so the whole gap can never land outside the playable
+area. A pipe spans the ceiling down to its gap, and from its gap down to the
+ground, which the ground band then draws over.
+
+Spawning is capped at `PipeManager.MAX_SPAWNS_PER_UPDATE` (3) per tick, so a
+long stall or a debugger pause cannot flood the screen with pipes; the leftover
+timer debt is dropped instead of accumulating.
+
 ## Run the tests
 
 ```bash
@@ -97,7 +129,8 @@ flappy_bird/
 │       ├── game.py              # Game: window, main loop, input, update, render
 │       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors)
 │       ├── player.py            # Player: position, velocity, flap, draw
-│       ├── pipe.py              # Pipe: gap geometry, scrolling, draw
+│       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
+│       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
@@ -109,6 +142,11 @@ flappy_bird/
 - `main.py` only initialises and runs `Game`; all logic lives in the package.
 - `Player` owns its own physics (position, velocity, boundaries) and knows
   nothing about the game loop, pipes or rendering order.
+- `Pipe` owns geometry and movement; `PipeManager` owns *when* pipes exist. The
+  manager is injected with an `rng`, so tests can make spawning deterministic.
+- `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`
+  and draws what the manager holds. `Game.pipes` is a read-only view of the
+  manager's live list.
 - Every tunable value is a constant in `settings.py`.
 - `Game` exposes `handle_events()`, `update(dt)` and `render()` separately from
   `run()`, so individual stages can be driven in tests.
@@ -119,7 +157,6 @@ flappy_bird/
 
 ## Next steps
 
-- Spawn pipes on a timer using `utils.random_gap_center`.
 - Add collision detection between `Player.rect` and each `Pipe.rects`.
 - Increment the score when a pipe is passed (`Pipe.has_behind`).
 - Swap the placeholder shapes for real sprites and sound.
