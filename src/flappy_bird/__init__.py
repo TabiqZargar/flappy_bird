@@ -3,6 +3,15 @@
 from . import settings
 from .audio import AudioManager, pre_init_mixer, render_buffers
 from .collision import check_any_pipe_collision, check_pipe_collision
+from .difficulty import (
+    BASELINE,
+    MAXIMUM,
+    DifficultyProfile,
+    all_profiles,
+    difficulty_level,
+    get_difficulty,
+    profile_for_level,
+)
 from .game import Game
 from .pipe import Pipe
 from .pipe_manager import PipeManager
@@ -34,6 +43,7 @@ __all__ = [
     "BirdSprite",
     "Cloud",
     "CloudField",
+    "DifficultyProfile",
     "GroundBand",
     "PanelCache",
     "TextCache",
@@ -52,6 +62,12 @@ __all__ = [
     "frame_delta",
     "random_gap_center",
     "tilt_for_velocity",
+    "all_profiles",
+    "difficulty_level",
+    "get_difficulty",
+    "profile_for_level",
+    "BASELINE",
+    "MAXIMUM",
 ]
 
 __version__ = "0.1.0"

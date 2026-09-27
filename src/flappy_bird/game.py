@@ -9,6 +9,7 @@ import pygame
 from . import settings
 from .audio import AudioManager, pre_init_mixer
 from .collision import check_any_pipe_collision
+from .difficulty import DifficultyProfile, get_difficulty
 from .pipe import Pipe
 from .pipe_manager import PipeManager
 from .player import Player
@@ -56,6 +57,9 @@ class Game:
         self.score_font = pygame.font.Font(None, settings.SCORE_FONT_SIZE)
         self.banner_font = pygame.font.Font(None, settings.BANNER_FONT_SIZE)
         self.title_font = pygame.font.Font(None, settings.TITLE_FONT_SIZE)
+        self.difficulty_font = pygame.font.Font(
+            None, settings.DIFFICULTY_FONT_SIZE
+        )
 
         self.player = Player()
         self.pipe_manager = PipeManager()
@@ -75,6 +79,16 @@ class Game:
     def pipes(self) -> list[Pipe]:
         """Live list of active pipes, owned by the pipe manager."""
         return self.pipe_manager.pipes
+
+    @property
+    def difficulty(self) -> DifficultyProfile:
+        """Pipe parameters the current score has earned.
+
+        Read-only on purpose: the game pushes profiles into the pipe manager and
+        nothing reads a level back to make a decision, so the score stays the one
+        and only source of truth.
+        """
+        return self.pipe_manager.difficulty
 
     @property
     def game_over(self) -> bool:
@@ -134,6 +148,27 @@ class Game:
         """Award points to the current score and keep the high score current."""
         self.score += points
         self.high_score = max(self.high_score, self.score)
+
+    def sync_difficulty(self) -> DifficultyProfile:
+        """Push the profile the current score has earned into the pipe manager.
+
+        Called at the end of every playing frame, after scoring, and the order
+        matters:
+
+        1. pipes move and new ones spawn for this frame;
+        2. collision is checked, and a crash returns before scoring;
+        3. points are awarded;
+        4. only then is the profile refreshed.
+
+        So a point earned on frame N can never reshape the pipe that paid it --
+        that pipe is already on screen with the geometry it spawned with -- and
+        the new profile first applies to the next pipe to be spawned. The refresh
+        is a clamp and a tuple index, and assigning a shared profile is a
+        reference store, so calling it every frame costs nothing measurable.
+        """
+        profile = get_difficulty(self.score)
+        self.pipe_manager.set_difficulty(profile)
+        return profile
 
     # --- Input ----------------------------------------------------------------
 
@@ -222,6 +257,10 @@ class Game:
             self.audio.play_score()
             self.visuals.pulse_score()
 
+        # Last: the pipes for this frame are already on their way, so the score
+        # just earned only ever affects pipes spawned from the next frame on.
+        self.sync_difficulty()
+
     def end_round(self) -> None:
         """Move to ``GAME_OVER`` and announce it exactly once.
 
@@ -266,6 +305,27 @@ class Game:
     def render_playing(self) -> None:
         """Live play: the world plus the running score."""
         self._draw_score()
+        self._draw_difficulty()
+
+    def _draw_difficulty(self) -> None:
+        """Draw a quiet level readout under the score.
+
+        Six possible strings, so the text cache holds one extra entry at most and
+        a long run cannot grow it.
+        """
+        level = self.difficulty.level
+        label = self.visuals.text.render(
+            self.difficulty_font,
+            f"Difficulty {level}",
+            settings.DIFFICULTY_TEXT_COLOR,
+        )
+        self.screen.blit(
+            label,
+            (
+                (settings.SCREEN_WIDTH - label.get_width()) // 2,
+                settings.DIFFICULTY_TEXT_Y,
+            ),
+        )
 
     def render_game_over(self) -> None:
         """Result screen: the final score, the best and a restart prompt."""

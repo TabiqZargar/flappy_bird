@@ -55,6 +55,32 @@ PIPE_SHADOW_COLOR = (16, 88, 40)
 PIPE_HIGHLIGHT_WIDTH = 6
 PIPE_SHADOW_WIDTH = 4
 
+# --- Difficulty -------------------------------------------------------------
+#
+# The ladder is derived from the pipe constants above, which stay exactly as they
+# were: level 0 *is* the original game. Each step tightens the pipes a little,
+# and every step is clamped, so the last level is the end of the road.
+
+#: Points needed per difficulty level.
+DIFFICULTY_SCORE_STEP = 5
+#: Highest level; reached at 25 points, after which the game stops getting harder.
+DIFFICULTY_MAX_LEVEL = 5
+
+#: Extra pixels per second added to PIPE_SPEED on each level (+40 at level 5).
+DIFFICULTY_SPEED_INCREMENT = 8.0
+#: Hard cap on pipe speed, however long the run goes on.
+DIFFICULTY_MAX_SPEED = 160.0
+
+#: Pixels removed from PIPE_GAP_SIZE on each level (-40 at level 5).
+DIFFICULTY_GAP_DECREMENT = 8
+#: Hard floor on the gap. Still ~3.5x the bird, so the last level is fair.
+DIFFICULTY_MIN_GAP = 120
+
+#: Seconds removed from PIPE_SPAWN_INTERVAL on each level (-0.4s at level 5).
+DIFFICULTY_SPAWN_DECREMENT = 0.08
+#: Hard floor on the spawn interval, so pipes can never arrive faster than this.
+DIFFICULTY_MIN_SPAWN_INTERVAL = 1.2
+
 # --- Presentation -----------------------------------------------------------
 
 BACKGROUND_COLOR = (233, 236, 239)
@@ -62,6 +88,10 @@ GROUND_COLOR = (222, 184, 135)
 TEXT_COLOR = (54, 54, 54)
 SCORE_FONT_SIZE = 28
 SCORE_TEXT_Y = 100
+#: A quiet level readout tucked under the score; only visible while playing.
+DIFFICULTY_FONT_SIZE = 15
+DIFFICULTY_TEXT_Y = 122
+DIFFICULTY_TEXT_COLOR = (74, 104, 128)
 BANNER_FONT_SIZE = 22
 TITLE_FONT_SIZE = 46
 

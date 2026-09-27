@@ -6,13 +6,16 @@ Current status: the window, main loop, input handling, the bird's physics
 (float position, gravity, flap, ceiling/ground detection), procedurally spawned
 pipes (randomized gaps, timed spawning, off-screen recycling), bird/pipe
 collision detection, scoring (one point per passed pipe plus a session high
-score) and an explicit start/play/game-over state machine are implemented.
-The look is layered on top: a cached sky gradient, drifting parallax clouds, a
-scrolling textured ground, a tilted animated bird and capped, lit pipes, all
-drawn with plain Pygame shapes and the built-in font — no external image, font
-or audio assets. Four short arcade sound effects are synthesised from scratch
-at start-up, and `M` mutes them. Sounds are intentionally the only audio
-feature for now; there is no music.
+score), a progressive difficulty ladder driven by that score, and an explicit
+start/play/game-over state machine are implemented. The look is layered on top: a
+cached sky gradient, drifting parallax clouds, a scrolling textured ground, a
+tilted animated bird and capped, lit pipes, all drawn with plain Pygame shapes
+and the built-in font — no external image, font or audio assets. Four short
+arcade sound effects are synthesised from scratch at start-up, and `M` mutes
+them. Sounds are intentionally the only audio feature for now; there is no music.
+
+The game starts exactly as the classic did and tightens very gently as you score:
+a little faster, a little tighter, a little more often, up to a bounded maximum.
 
 ## Requirements
 
@@ -296,6 +299,95 @@ device.
 The only format assumption is 16-bit signed PCM. If the mixer opens on anything
 else, the manager stays silent rather than playing noise.
 
+## Difficulty
+
+The game gets harder as you score, gently and by a fixed amount. One level per
+five points, six levels, and level 0 *is* the original game:
+
+```
+level = min(max(score, 0) // DIFFICULTY_SCORE_STEP, DIFFICULTY_MAX_LEVEL)
+
+speed      = min(PIPE_SPEED  + level * 8.0,  160.0)   # 120 -> 160 px/s
+gap        = max(PIPE_GAP_SIZE - level * 8,    120)   # 160 -> 120 px
+interval   = max(PIPE_SPAWN_INTERVAL - level * 0.08, 1.2)   # 1.60 -> 1.20 s
+```
+
+| Level | From score | Speed | Gap | Interval |
+| ----- | ---------- | ----- | --- | -------- |
+| 0     | 0          | 120   | 160 | 1.60 s   |
+| 1     | 5          | 128   | 152 | 1.52 s   |
+| 2     | 10         | 136   | 144 | 1.44 s   |
+| 3     | 15         | 144   | 136 | 1.36 s   |
+| 4     | 20         | 152   | 128 | 1.28 s   |
+| 5     | 25         | 160   | 120 | 1.20 s   |
+
+The progression is **bounded**: level 5 is reached at 25 points and no score ever
+makes the game harder again. The three clamps are the reason, and they are hit
+exactly at the last level, so the caps are a guarantee rather than a coincidence.
+
+It is also deliberately **subtle**. A full ladder is a 33% faster scroll and a
+25% tighter gap — the hardest gap is still 3.5x the bird. Most runs end long
+before the cap, so difficulty is something you feel rather than something you
+see. Consecutive pipe pairs never overlap either: the spacing between them stays
+at 192–196 px, comfortably wider than any gap, at every single level.
+
+`difficulty.py` is a pure function of the score and nothing else — no clock, no
+RNG, no game state. It only produces numbers; it never moves, spawns or draws
+anything. There are just six possible answers, so they are built once at import
+and `get_difficulty(score)` is a clamp and a tuple index.
+
+```python
+from flappy_bird import get_difficulty, all_profiles, BASELINE, MAXIMUM
+
+get_difficulty(0)    # level 0, pipe_speed=120.0, pipe_gap=160, spawn_interval=1.6
+get_difficulty(12)   # level 2, pipe_speed=136.0, pipe_gap=144, spawn_interval=1.44
+get_difficulty(999)  # level 5, the same object every time, forever
+get_difficulty(-5)   # level 0; a negative score cannot break the index
+```
+
+### Only future pipes are affected
+
+Difficulty controls *when a pipe is born*, never a pipe that already exists. A
+pipe copies the speed and gap off the profile at spawn and keeps them for its
+whole life, so nothing in flight ever speeds up, tightens or changes shape
+underneath you — and a pipe that just paid out a point cannot reshape itself in
+the same frame.
+
+That is why the update order in `Game.update` is fixed and deliberate:
+
+```
+pipes move and new ones spawn  ->  collision check  ->  scoring  ->  difficulty
+```
+
+A point earned on frame N is applied to the profile *after* that frame's pipes
+are already on their way, so it first affects the next pipe to spawn. The same
+ordering is what stops a scoring frame from being able to alter the collision
+geometry of the pipe that caused it.
+
+### What difficulty does not touch
+
+The bird is exactly as it was. `GRAVITY`, `JUMP_VELOCITY` and `MAX_FALL_SPEED`
+are never referenced by the difficulty code, and `tests/test_difficulty.py`
+asserts that `player`, `collision`, `scoring`, `visuals` and `audio` do not
+import the module or read a single `DIFFICULTY_*` setting. `BIRD_SIZE`,
+`PIPE_WIDTH`, the ceiling and the ground are untouched as well — difficulty only
+ever produces the three numbers a *new* pipe is built from.
+
+### Restarts and frozen states
+
+`PipeManager.reset()` puts the profile back to level 0 along with the pipes and
+the spawn timer, so a restart is the original game again while the high score
+carries over. The `START` attract screen and the `GAME_OVER` screen are frozen
+worlds, so difficulty cannot advance in either: the start screen spawns no pipes
+at all, and a game-over screen is never asked for a new profile.
+
+The large-`dt` safeguards are unaffected. Whatever the difficulty, a 30-second
+stall still spawns at most `MAX_SPAWNS_PER_UPDATE` pipes and discards the
+leftover time, so there is no catch-up burst and no spawn debt.
+
+A quiet `Difficulty N` readout sits under the score while playing, for anyone who
+wants to watch the ladder climb.
+
 ## Collision
 
 `collision.py` holds the only collision rules, so they can be tested without a
@@ -420,7 +512,17 @@ right direction of pitch), safe initialisation against a working mixer, a
 refusing mixer and a disabled manager, volume clamping, mute, and the fact that
 no gameplay module imports `audio` or mentions `pygame.mixer`. The game's own
 sound wiring is checked with a recording stand-in, so **no test needs a sound
-device**. `418 passed` at the time of writing.
+device**.
+
+`test_difficulty.py` adds 113 tests over the ladder and its plumbing: the level
+boundaries, negative and huge scores, the clamps, monotonicity of all three
+parameters, and the fairness invariant that consecutive pairs never overlap. The
+integration half drives a live game to prove that a point never reshapes the pipe
+that paid it, that pipes in flight keep their birth geometry, that new pipes pick
+up the current profile, and that restart, `START` and `GAME_OVER` all behave.
+Several of them read the modules' *syntax trees* rather than their text, so the
+isolation guarantees cannot be defeated by a comment. `531 passed` at the time
+of writing.
 
 Two fixtures model the two situations: `game` is a round already in progress
 (what the gameplay tests drive), and `idle_game` is a fresh instance still
@@ -437,9 +539,10 @@ flappy_bird/
 │   └── flappy_bird/
 │       ├── __init__.py          # public API re-exports
 │       ├── game.py              # Game: window, main loop, input, update, render
-│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio)
+│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio, difficulty)
 │       ├── audio.py             # AudioManager: generated effects, volume, mute
 │       ├── visuals.py           # Visuals: sky, clouds, ground, bird sprite, caches
+│       ├── difficulty.py        # DifficultyProfile: score -> pipe speed / gap / spawn interval
 │       ├── player.py            # Player: position, velocity, flap, draw
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
 │       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
@@ -451,7 +554,8 @@ flappy_bird/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
     ├── test_game.py
     ├── test_visuals.py
-    └── test_audio.py
+    ├── test_audio.py
+    └── test_difficulty.py
 ```
 
 ## Design notes
@@ -487,7 +591,7 @@ flappy_bird/
 
 ## Next steps
 
-- Background music, and a settings screen for volume.
+- Background music, and a settings screen for volume and difficulty.
 - Replace the procedural bird with a sprite sheet, keeping `BirdSprite`'s
   cached-surface interface so nothing else has to change.
 
