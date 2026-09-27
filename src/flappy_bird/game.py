@@ -13,7 +13,8 @@ from .pipe_manager import PipeManager
 from .player import Player
 from .scoring import count_newly_passed
 from .state import GameState
-from .utils import centered_rect, frame_delta
+from .utils import frame_delta
+from .visuals import Visuals
 
 #: Keys that mean "confirm" in every state: start, flap, restart.
 FLAP_KEYS = (pygame.K_SPACE, pygame.K_UP, pygame.K_w)
@@ -50,9 +51,11 @@ class Game:
         self.clock = pygame.time.Clock()
         self.score_font = pygame.font.Font(None, settings.SCORE_FONT_SIZE)
         self.banner_font = pygame.font.Font(None, settings.BANNER_FONT_SIZE)
+        self.title_font = pygame.font.Font(None, settings.TITLE_FONT_SIZE)
 
         self.player = Player()
         self.pipe_manager = PipeManager()
+        self.visuals = Visuals()
         self.state = GameState.START
         self.score = 0
         self.high_score = 0
@@ -172,9 +175,15 @@ class Game:
     def update(self, dt: float) -> None:
         """Advance the simulation by ``dt`` seconds while playing.
 
-        The attract screen and the game-over screen are frozen: no physics, no
-        pipes, no scoring.
+        The decoration always ticks, so the attract screen is alive and the
+        game-over screen settles; only the world itself is frozen outside
+        ``PLAYING``: no physics, no pipes, no scoring.
         """
+        self.visuals.update(
+            dt,
+            animate_bird=self.state.is_playing,
+            drift_clouds=self.state is not GameState.GAME_OVER,
+        )
         if not self.state.is_playing:
             return
 
@@ -204,13 +213,14 @@ class Game:
         """Draw the background, the pipes, the bird and the ground.
 
         Shared by every state, so the bird stays visible on the start and
-        game-over screens and the world is still visible underneath the banners.
+        game-over screens and the world is still visible underneath the cards.
         """
-        self.screen.fill(settings.BACKGROUND_COLOR)
+        self.visuals.draw_sky(self.screen)
+        self.visuals.draw_clouds(self.screen)
         for pipe in self.pipes:
             pipe.draw(self.screen)
-        self.player.draw(self.screen)
-        self._draw_ground()
+        self.visuals.draw_bird(self.screen, self.player)
+        self.visuals.draw_ground(self.screen)
 
     def render_start_screen(self) -> None:
         """Attract screen: the title and a single start prompt."""
@@ -232,48 +242,20 @@ class Game:
         )
 
     def _draw_ground(self) -> None:
-        ground = pygame.Rect(
-            0, settings.GROUND_TOP, settings.SCREEN_WIDTH, settings.GROUND_HEIGHT
-        )
-        pygame.draw.rect(self.screen, settings.GROUND_COLOR, ground)
+        self.visuals.draw_ground(self.screen)
 
     def _draw_score(self) -> None:
         label = self._render_text(f"Score: {self.score}")
         self.screen.blit(label, self._centered_x(label, settings.SCORE_TEXT_Y))
 
     def _render_text(self, text: str) -> pygame.Surface:
-        return self.score_font.render(text, True, settings.TEXT_COLOR)
+        return self.visuals.text.render(self.score_font, text)
 
     def _centered_x(self, label: pygame.Surface, y: int) -> tuple[int, int]:
         return ((settings.SCREEN_WIDTH - label.get_width()) // 2, y)
 
     def _draw_panel(self, title: str, lines: list[str]) -> None:
-        """Draw a centered translucent panel with a title and body lines."""
-        title_label = self.banner_font.render(title, True, settings.TEXT_COLOR)
-        line_labels = [
-            self.banner_font.render(line, True, settings.TEXT_COLOR) for line in lines
-        ]
-
-        line_height = self.banner_font.get_height()
-        padding = 20
-        line_gap = 4
-        width = max(
-            [label.get_width() for label in [title_label, *line_labels]] + [0]
-        ) + padding * 2
-        height = (
-            padding * 2
-            + title_label.get_height()
-            + (line_height + line_gap) * len(line_labels)
+        """Draw a centered translucent card with a title and body lines."""
+        self.visuals.panels.draw(
+            self.screen, title, lines, self.title_font, self.banner_font
         )
-
-        panel = pygame.Surface((width, height), pygame.SRCALPHA)
-        panel.fill((255, 255, 255, 220))
-
-        y = padding
-        panel.blit(title_label, (padding, y))
-        y += title_label.get_height() + line_gap
-        for label in line_labels:
-            panel.blit(label, (padding, y))
-            y += line_height + line_gap
-
-        self.screen.blit(panel, centered_rect(panel, self.screen.get_size()))

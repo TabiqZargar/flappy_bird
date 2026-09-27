@@ -9,6 +9,7 @@ from __future__ import annotations
 import pygame
 
 from . import settings
+from .visuals import draw_bird
 
 
 class Player:
@@ -96,10 +97,9 @@ class Player:
     # --- Rendering -----------------------------------------------------------
 
     def draw(self, surface: pygame.Surface) -> None:
-        """Draw the bird as a placeholder circle with an outline."""
-        center = self.position
-        radius = round(self.radius)
-        pygame.draw.circle(
-            surface, settings.BIRD_OUTLINE_COLOR, center, radius + 2
-        )
-        pygame.draw.circle(surface, settings.BIRD_COLOR, center, radius)
+        """Draw the bird sprite centred on the player position.
+
+        The sprite is tilted from ``velocity_y`` for flavour only; the collision
+        rectangle is a plain axis-aligned box and is never rotated.
+        """
+        draw_bird(surface, self.x, self.y, self.velocity_y)

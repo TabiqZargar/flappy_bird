@@ -7,8 +7,10 @@ Current status: the window, main loop, input handling, the bird's physics
 pipes (randomized gaps, timed spawning, off-screen recycling), bird/pipe
 collision detection, scoring (one point per passed pipe plus a session high
 score) and an explicit start/play/game-over state machine are implemented.
-Graphics are drawn with plain Pygame shapes and the built-in font — no external
-image or audio assets. Sounds are intentionally left for a later phase.
+The look is layered on top: a cached sky gradient, drifting parallax clouds, a
+scrolling textured ground, a tilted animated bird and capped, lit pipes, all
+drawn with plain Pygame shapes and the built-in font — no external image, font
+or audio assets. Sounds are intentionally left for a later phase.
 
 ## Requirements
 
@@ -132,13 +134,96 @@ state, so no single method grows a nest of conditionals:
 
 | Method                  | Draws                                                       |
 | ----------------------- | ----------------------------------------------------------- |
-| `render_world()`        | background, pipes, bird, ground (shared by every state)     |
+| `render_world()`        | sky, clouds, pipes, bird, ground (shared by every state)     |
 | `render_start_screen()` | `FLAPPY BIRD` + `Press SPACE or Click to Start`             |
 | `render_playing()`      | the running `Score: N`                                      |
 | `render_game_over()`    | `GAME OVER`, `Score: N`, `Best: N`, `Press SPACE or Click to Restart` |
 
 The bird and the world stay visible underneath the panels, and every panel is
 sized to its own text and centred, so the prompts never overlap the score.
+Panel surfaces are cached per (title, lines) pair, so the cards are rasterised
+once instead of on every frame.
+
+## Visuals
+
+`visuals.py` owns the entire look of the game. It reads state and an explicit
+`dt`, and it never writes gameplay: it has no reference to the player, the
+pipes, the score or the collision rules, so nothing it draws can change how the
+game plays.
+
+`Game` owns one `Visuals` and advances it once per `update(dt)`, before the
+early return for non-playing states:
+
+```python
+self.visuals.update(
+    dt,
+    animate_bird=self.state.is_playing,
+    drift_clouds=self.state is not GameState.GAME_OVER,
+)
+```
+
+That single call decides the whole ambient-motion policy:
+
+| State      | Bird wing/tilt animation | Clouds + ground scroll |
+| ---------- | ------------------------ | ---------------------- |
+| `START`    | frozen                   | drifting               |
+| `PLAYING`  | running                  | drifting               |
+| `GAME_OVER`| frozen                   | frozen                 |
+
+The attract screen is therefore alive rather than static, the game-over screen
+freezes completely behind its panel, and the gameplay rules stay untouched.
+
+### The bird
+
+`BirdSprite` draws the bird out of ellipses and polygons — body, belly, wing
+with two feather stripes, eye with pupil, beak and tail — and gives it two
+independent motions:
+
+- **Tilt** from vertical velocity: rising lifts the nose, falling drops it,
+  clamped to `BIRD_TILT_MIN_DEGREES`/`BIRD_TILT_MAX_DEGREES`, and quantised into
+  `BIRD_TILT_STEPS` buckets so a smooth curve does not rebuild a surface on
+  every micro-change of velocity.
+- **Wing** from an accumulated `wing_phase` driven by `dt`, cycling through
+  `BIRD_WING_FRAMES` raised/lowered positions at `BIRD_WING_FPS`.
+
+Each `(tilt, wing)` pair is rendered once into a surface and cached, so at most
+`BIRD_TILT_STEPS * BIRD_WING_FRAMES` bird surfaces exist, no matter how long the
+game runs. The canvas carries a small margin so a rotated bird is never clipped.
+
+**Rotation is visual only.** `Player.rect` is still the same axis-aligned
+`BIRD_SIZE` square that collision uses, so the hitbox is bit-for-bit the hitbox
+it has always been. The drawn body is `BIRD_SIZE` either way; tilting only
+enlarges the transparent canvas around it.
+
+`Player.draw()` simply delegates to the shared default sprite, so a bare
+`Player` still draws itself without a `Game`.
+
+### World layers
+
+`render_world()` draws back to front: sky, clouds, pipes, bird, ground.
+
+- **Sky** — a `build_sky` vertical gradient, rasterised once and blitted.
+- **Clouds** — `CloudField` holds layered clouds that wrap around the screen as
+  they drift, at different speeds per layer for parallax. It takes an `rng`, so
+  a test can pin the layout.
+- **Ground** — `GroundBand` scrolls a tiled strip of grass plus soil marks. The
+  scroll is pure texture: the collision line stays exactly at `GROUND_TOP`, and
+  the grass edge stays pinned while only the pattern moves.
+- **Pipes** — `Pipe.draw()` adds a cap at the end facing the gap, a vertical
+  highlight, a shadow and an outline, all drawn *inside* `top_rect` and
+  `bottom_rect`. A pipe can therefore never look larger than it collides, and
+  the gap always reads as a gap.
+
+### Caching
+
+Nothing expensive is rebuilt per frame:
+
+| Cache          | Key                        | Bounded by                    |
+| -------------- | -------------------------- | ----------------------------- |
+| `Visuals.sky`  | built once                 | 1 surface                     |
+| `BirdSprite`   | `(tilt_index, wing_index)` | `TILT_STEPS * WING_FRAMES`    |
+| `TextCache`    | text + font                | one per distinct label        |
+| `PanelCache`   | title + lines              | `MAX_PANELS` (24), LRU-ish    |
 
 ## Collision
 
@@ -251,6 +336,13 @@ high-score lifecycle across restarts, and the state machine: the three states
 and their transitions, that a frozen state really is frozen, per-key and
 per-button input in every state, and each screen rendering the right text.
 
+`test_visuals.py` adds 85 tests over the presentation layer: the sky gradient,
+cloud layout and wrapping, the ground band and its fixed collision line, the
+tilt curve and its clamps, wing animation from `dt`, the sprite caches, the
+panels and the score text, pipe shading, and — importantly — that rendering and
+updating the visuals never move the player, the pipes, the score or
+`Player.rect`. `317 passed` at the time of writing.
+
 Two fixtures model the two situations: `game` is a round already in progress
 (what the gameplay tests drive), and `idle_game` is a fresh instance still
 waiting in `START`.
@@ -267,6 +359,7 @@ flappy_bird/
 │       ├── __init__.py          # public API re-exports
 │       ├── game.py              # Game: window, main loop, input, update, render
 │       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors)
+│       ├── visuals.py           # Visuals: sky, clouds, ground, bird sprite, caches
 │       ├── player.py            # Player: position, velocity, flap, draw
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
 │       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
@@ -276,7 +369,8 @@ flappy_bird/
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
-    └── test_game.py
+    ├── test_game.py
+    └── test_visuals.py
 ```
 
 ## Design notes
@@ -292,6 +386,9 @@ flappy_bird/
   flag, so "one point per pipe" cannot drift from the pipe objects themselves.
 - `state.py` owns the lifecycle vocabulary, so nothing else has to invent a
   string or a boolean to mean "the round is over".
+- `visuals.py` owns the look, and is the only module that both reads the state
+  and holds caches. Because it cannot reach the player or the pipes, art changes
+  are structurally incapable of altering the physics or the hitboxes.
 - `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`,
   asks `collision` whether the bird hit anything, awards what `scoring` reports
   and draws what the manager holds. `Game.pipes` is a read-only view of the
@@ -306,5 +403,7 @@ flappy_bird/
 
 ## Next steps
 
-- Swap the placeholder shapes for real sprites and sound.
+- Add sound (flap, score, hit) — still the only missing subsystem.
+- Replace the procedural bird with a sprite sheet, keeping `BirdSprite`'s
+  cached-surface interface so nothing else has to change.
 
