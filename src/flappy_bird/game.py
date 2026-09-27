@@ -7,6 +7,7 @@ import os
 import pygame
 
 from . import settings
+from .collision import check_any_pipe_collision
 from .pipe import Pipe
 from .pipe_manager import PipeManager
 from .player import Player
@@ -102,7 +103,9 @@ class Game:
         self.player.update(dt)
         self.pipe_manager.update(dt)
 
-        if self.player.hit_ceiling or self.player.hit_ground:
+        if self.player.is_out_of_bounds or check_any_pipe_collision(
+            self.player, self.pipes
+        ):
             self.game_over = True
 
     # --- Rendering -----------------------------------------------------------

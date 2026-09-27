@@ -3,11 +3,11 @@
 A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 
 Current status: the window, main loop, input handling, the bird's physics
-(float position, gravity, flap, ceiling/ground detection) and procedurally
-spawned pipes (randomized gaps, timed spawning, off-screen recycling) are
-implemented. Graphics are drawn with plain Pygame shapes — no external image or
-audio assets. Pipe/player collision, scoring, sounds and menus are intentionally
-left for later phases.
+(float position, gravity, flap, ceiling/ground detection), procedurally spawned
+pipes (randomized gaps, timed spawning, off-screen recycling) and bird/pipe
+collision detection are implemented. Graphics are drawn with plain Pygame
+shapes — no external image or audio assets. Scoring, sounds and menus are
+intentionally left for later phases.
 
 ## Requirements
 
@@ -75,6 +75,29 @@ A flap **assigns** `velocity_y` instead of adding to it, so mashing the key can
 never build up a runaway speed. The player exposes `hit_ceiling` and
 `hit_ground`; `Game.update` latches `game_over` when either becomes true.
 
+## Collision
+
+`collision.py` holds the only collision rules, so they can be tested without a
+running game:
+
+```python
+check_pipe_collision(player, pipe)        # one pipe
+check_any_pipe_collision(player, pipes)   # any pipe in a list
+```
+
+The bird's `Player.rect` is compared against `Pipe.top_rect` and
+`Pipe.bottom_rect` with `pygame.Rect.colliderect` — no per-pixel checks.
+
+**Boundary semantics** (standard Pygame behaviour): a collision needs a positive
+overlap on *both* axes. Rectangles that merely share an edge or a corner do not
+collide, so a hitbox resting exactly against a pipe edge still passes while one
+pixel of penetration does not.
+
+`Game.update` checks the player against the current pipes after both systems
+have moved, and latches `game_over` on a hit — exactly as it already did for the
+ceiling and the ground. While `game_over` is set, no further updates run, so the
+bird and the pipes freeze where they collided.
+
 ## Pipes
 
 `PipeManager` owns spawning, timing and recycling; `Pipe` owns only its own
@@ -113,8 +136,9 @@ python -m pytest
 ```
 
 The tests default to Pygame's headless `dummy` video driver, so they pass
-without a display. They check the settings and window configuration, the
-player's gravity/jump behaviour and the pipe geometry.
+without a display. They cover the settings and window configuration, the
+player's gravity/jump behaviour, pipe geometry and spawning, and every collision
+edge case.
 
 ## Project structure
 
@@ -131,6 +155,7 @@ flappy_bird/
 │       ├── player.py            # Player: position, velocity, flap, draw
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
 │       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
+│       ├── collision.py         # bird/pipe hit tests
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
@@ -144,9 +169,11 @@ flappy_bird/
   nothing about the game loop, pipes or rendering order.
 - `Pipe` owns geometry and movement; `PipeManager` owns *when* pipes exist. The
   manager is injected with an `rng`, so tests can make spawning deterministic.
-- `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`
-  and draws what the manager holds. `Game.pipes` is a read-only view of the
-  manager's live list.
+- `collision.py` owns the hit rules and has no state, so every edge case is
+  testable without a window.
+- `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`,
+  asks `collision` whether the bird hit anything, and draws what the manager
+  holds. `Game.pipes` is a read-only view of the manager's live list.
 - Every tunable value is a constant in `settings.py`.
 - `Game` exposes `handle_events()`, `update(dt)` and `render()` separately from
   `run()`, so individual stages can be driven in tests.
@@ -157,6 +184,6 @@ flappy_bird/
 
 ## Next steps
 
-- Add collision detection between `Player.rect` and each `Pipe.rects`.
 - Increment the score when a pipe is passed (`Pipe.has_behind`).
 - Swap the placeholder shapes for real sprites and sound.
+

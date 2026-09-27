@@ -6,6 +6,7 @@ import pygame
 import pytest
 
 from flappy_bird import settings
+from flappy_bird.collision import check_any_pipe_collision, check_pipe_collision
 from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
 from flappy_bird.pipe_manager import PipeManager
@@ -533,6 +534,167 @@ class TestGamePipes:
     def test_rendering_with_pipes_does_not_raise(self, game):
         advance(game, 2.5, render=True)
         assert game.pipes
+
+
+class TestCollision:
+    """Rect.colliderect semantics: only a positive overlap on both axes collides."""
+
+    @pytest.fixture()
+    def pipe(self):
+        return Pipe(x=200, gap_y=300)
+
+    @pytest.fixture()
+    def half(self):
+        return settings.BIRD_SIZE // 2
+
+    def place_bird(self, x: int, y: int) -> Player:
+        player = Player()
+        player.x = float(x)
+        player.y = float(y)
+        return player
+
+    def test_empty_pipe_list_has_no_collision(self):
+        player = self.place_bird(230, 100)
+        assert check_any_pipe_collision(player, []) is False
+
+    def test_bird_completely_inside_the_gap_does_not_collide(self, pipe):
+        assert check_pipe_collision(self.place_bird(230, pipe.gap_y), pipe) is False
+
+    def test_bird_exactly_filling_the_gap_does_not_collide(self, pipe, half):
+        just_below_top = pipe.gap_top + half + 1
+        just_above_bottom = pipe.gap_bottom - half - 1
+        for center in (just_below_top, just_above_bottom):
+            assert check_pipe_collision(self.place_bird(230, center), pipe) is False
+
+    def test_bird_flush_against_the_top_pipe_does_not_collide(self, pipe, half):
+        flush = pipe.gap_top + half
+        assert check_pipe_collision(self.place_bird(230, flush), pipe) is False
+
+    def test_bird_flush_against_the_bottom_pipe_does_not_collide(self, pipe, half):
+        flush = pipe.gap_bottom - half
+        assert check_pipe_collision(self.place_bird(230, flush), pipe) is False
+
+    def test_bird_one_pixel_into_the_top_pipe_collides(self, pipe, half):
+        poking = pipe.gap_top - 1 + half
+        assert check_pipe_collision(self.place_bird(230, poking), pipe) is True
+
+    def test_bird_one_pixel_into_the_bottom_pipe_collides(self, pipe, half):
+        poking = pipe.gap_bottom + 1 - half
+        assert check_pipe_collision(self.place_bird(230, poking), pipe) is True
+
+    def test_bird_deeply_overlapping_the_top_pipe_collides(self, pipe):
+        assert check_pipe_collision(self.place_bird(230, 100), pipe) is True
+
+    def test_bird_deeply_overlapping_the_bottom_pipe_collides(self, pipe):
+        assert check_pipe_collision(self.place_bird(230, 500), pipe) is True
+
+    def test_bird_above_the_gap_but_horizontally_clear_does_not_collide(
+        self, pipe, half
+    ):
+        clear = pipe.x - half - 1
+        assert check_pipe_collision(self.place_bird(clear, 100), pipe) is False
+
+    def test_bird_past_the_pipe_does_not_collide(self, pipe, half):
+        clear = pipe.x + pipe.width + half + 1
+        assert check_pipe_collision(self.place_bird(clear, 100), pipe) is False
+
+    def test_bird_touching_the_pipe_side_does_not_collide(self, pipe, half):
+        flush = pipe.x - half
+        assert check_pipe_collision(self.place_bird(flush, 100), pipe) is False
+
+    def test_horizontal_overlap_inside_the_gap_does_not_collide(self, pipe):
+        assert check_pipe_collision(self.place_bird(230, pipe.gap_y), pipe) is False
+
+    def test_collision_uses_the_player_hitbox(self, pipe):
+        player = self.place_bird(230, pipe.gap_y)
+        assert check_pipe_collision(player, pipe) is False
+        player.y = 100.0
+        assert check_pipe_collision(player, pipe) is True
+
+    def test_collision_detected_in_any_pipe_of_a_list(self, pipe):
+        safe = Pipe(x=200, gap_y=300)
+        deadly = Pipe(x=400, gap_y=100)
+        player = self.place_bird(430, 400)
+        assert check_any_pipe_collision(player, [safe, deadly]) is True
+
+    def test_no_collision_when_every_pipe_is_safe(self, pipe):
+        safe = [Pipe(x=200, gap_y=300), Pipe(x=400, gap_y=300)]
+        player = self.place_bird(230, 300)
+        assert check_any_pipe_collision(player, safe) is False
+
+    def test_collision_ignores_degenerate_zero_height_columns(self):
+        flat = Pipe(x=200, gap_y=settings.CEILING_Y)
+        assert flat.top_rect.height == 0
+        player = self.place_bird(230, 500)
+        assert check_pipe_collision(player, flat) is True
+
+
+class TestGameCollision:
+    def place_blocking_pipe(self, game: Game) -> Pipe:
+        """Add a pipe whose gap sits far above the bird, blocking its path."""
+        pipe = Pipe(
+            x=settings.BIRD_START_X - 10,
+            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
+        )
+        game.pipe_manager.pipes.append(pipe)
+        return pipe
+
+    def test_pipe_collision_latches_game_over(self, game):
+        self.place_blocking_pipe(game)
+        game.update(DT)
+        assert game.game_over is True
+
+    def test_movement_freezes_after_collision(self, game):
+        self.place_blocking_pipe(game)
+        game.update(DT)
+        assert game.game_over is True
+        bird_y = game.player.y
+        pipe_x = game.pipes[0].x
+        for _ in range(10):
+            game.update(DT)
+        assert game.player.y == bird_y
+        assert game.pipes[0].x == pipe_x
+
+    def test_clear_path_keeps_the_game_running(self, game):
+        game.pipe_manager.pipes.append(
+            Pipe(x=settings.BIRD_START_X - 10, gap_y=settings.BIRD_START_Y)
+        )
+        game.update(DT)
+        assert game.game_over is False
+
+    def test_ground_collision_still_latches(self, game):
+        game.player.y = settings.GROUND_TOP
+        game.update(DT)
+        assert game.game_over is True
+
+    def test_ceiling_collision_still_latches(self, game):
+        game.player.y = settings.CEILING_Y
+        game.update(DT)
+        assert game.game_over is True
+
+    def test_restart_clears_collision_state(self, game):
+        self.place_blocking_pipe(game)
+        game.update(DT)
+        assert game.game_over is True
+
+        game.restart()
+        assert game.game_over is False
+        assert game.pipes == []
+        assert game.player.position == (
+            settings.BIRD_START_X,
+            settings.BIRD_START_Y,
+        )
+
+        start_y = game.player.y
+        game.update(DT)
+        assert game.player.y != start_y
+
+    def test_flapping_is_ignored_after_game_over(self, game):
+        self.place_blocking_pipe(game)
+        game.update(DT)
+        frozen_velocity = game.player.velocity_y
+        game.flap()
+        assert game.player.velocity_y == frozen_velocity
 
 
 def test_clamp_bounds_values():
