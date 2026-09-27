@@ -1,11 +1,12 @@
 # Flappy Bird
 
-A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird scaffold.
+A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 
-This is the **initial scaffold**: window, main loop, gravity/jump physics and a
-pipe placeholder are in place. Graphics are drawn with plain Pygame shapes — no
-external image or audio assets — and pipe spawning, collision and scoring are
-intentionally left for later.
+Current status: the window, main loop, input handling and the bird's physics
+(float position, gravity, flap, ceiling/ground detection) are implemented.
+Graphics are drawn with plain Pygame shapes — no external image or audio
+assets. Pipe spawning, collision, scoring, sounds and menus are intentionally
+left for later phases.
 
 ## Requirements
 
@@ -48,11 +49,30 @@ $env:PYTHONPATH = "src"; python main.py
 
 ### Controls
 
-| Key            | Action            |
-| -------------- | ----------------- |
-| `Space`/`Up`/`W` | Flap upwards     |
-| `R`            | Restart          |
-| `Esc`          | Quit             |
+| Key                | Action        |
+| ------------------ | ------------- |
+| `Space`/`Up`/`W`   | Flap upwards  |
+| Left mouse click   | Flap upwards  |
+| `R`                | Restart       |
+| `Esc`              | Quit          |
+
+## Physics
+
+All movement is integrated against a delta time in seconds, so the game feels
+identical at any frame rate. The tunables live in `src/flappy_bird/settings.py`:
+
+| Constant            | Value     | Meaning                                    |
+| ------------------- | --------- | ------------------------------------------ |
+| `GRAVITY`           | `1400.0`  | Downward acceleration in px/s²             |
+| `JUMP_VELOCITY`     | `-520.0`  | Upward velocity (px/s) set on each flap    |
+| `MAX_FALL_SPEED`    | `750.0`   | Terminal downward velocity in px/s         |
+| `BIRD_SIZE`         | `34`      | Bird hitbox size in px                     |
+| `CEILING_Y`         | `0`       | Top of the playable area                   |
+| `GROUND_TOP`        | `680`     | Ground line (`SCREEN_HEIGHT - GROUND_HEIGHT`) |
+
+A flap **assigns** `velocity_y` instead of adding to it, so mashing the key can
+never build up a runaway speed. The player exposes `hit_ceiling` and
+`hit_ground`; `Game.update` latches `game_over` when either becomes true.
 
 ## Run the tests
 
@@ -87,6 +107,8 @@ flappy_bird/
 ## Design notes
 
 - `main.py` only initialises and runs `Game`; all logic lives in the package.
+- `Player` owns its own physics (position, velocity, boundaries) and knows
+  nothing about the game loop, pipes or rendering order.
 - Every tunable value is a constant in `settings.py`.
 - `Game` exposes `handle_events()`, `update(dt)` and `render()` separately from
   `run()`, so individual stages can be driven in tests.

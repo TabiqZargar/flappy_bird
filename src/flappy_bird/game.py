@@ -71,15 +71,23 @@ class Game:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
                 self.handle_keydown(event.key)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self.flap()
 
     def handle_keydown(self, key: int) -> None:
         if key == pygame.K_ESCAPE:
             self.running = False
         elif key == pygame.K_r:
             self.restart()
-        elif key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w) and not self.game_over:
-            self.player.jump()
-            self.has_flapped = True
+        elif key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
+            self.flap()
+
+    def flap(self) -> None:
+        """Make the bird flap, unless the round is already over."""
+        if self.game_over:
+            return
+        self.player.jump()
+        self.has_flapped = True
 
     def update(self, dt: float) -> None:
         if self.game_over:
@@ -90,7 +98,7 @@ class Game:
             pipe.update(dt)
         self.pipes = [pipe for pipe in self.pipes if not pipe.is_off_screen]
 
-        if self.player.is_out_of_bounds:
+        if self.player.hit_ceiling or self.player.hit_ground:
             self.game_over = True
 
     # --- Rendering -----------------------------------------------------------
@@ -105,10 +113,12 @@ class Game:
         if self.game_over:
             self._draw_banner("GAME OVER", "press R to restart")
         elif not self.has_flapped:
-            self._draw_banner("FLAPPY BIRD", "space to flap")
+            self._draw_banner("FLAPPY BIRD", "space or click to flap")
 
     def _draw_ground(self) -> None:
-        ground = pygame.Rect(0, settings.SCREEN_HEIGHT - 20, settings.SCREEN_WIDTH, 20)
+        ground = pygame.Rect(
+            0, settings.GROUND_TOP, settings.SCREEN_WIDTH, settings.GROUND_HEIGHT
+        )
         pygame.draw.rect(self.screen, settings.GROUND_COLOR, ground)
 
     def _draw_score(self) -> None:

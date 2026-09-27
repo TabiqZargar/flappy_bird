@@ -14,18 +14,22 @@ CAPTION = "Flappy Bird"
 
 BIRD_START_X = 90
 BIRD_START_Y = 300
-BIRD_WIDTH = 34
-BIRD_HEIGHT = 24
-BIRD_RADIUS = 12
-BIRD_JUMP_VELOCITY = -380.0
+BIRD_SIZE = 34
 BIRD_COLOR = (255, 214, 10)
 BIRD_OUTLINE_COLOR = (60, 42, 0)
 
 # --- Physics ----------------------------------------------------------------
 
 GRAVITY = 1400.0
-MAX_FALL_SPEED = 700.0
+JUMP_VELOCITY = -520.0
+MAX_FALL_SPEED = 750.0
 MAX_FRAME_TIME = 1.0 / 15.0
+GROUND_HEIGHT = 20
+
+# --- Playable area ----------------------------------------------------------
+
+CEILING_Y = 0
+GROUND_TOP = SCREEN_HEIGHT - GROUND_HEIGHT
 
 # --- Pipes ------------------------------------------------------------------
 
