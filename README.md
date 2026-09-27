@@ -4,10 +4,11 @@ A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 
 Current status: the window, main loop, input handling, the bird's physics
 (float position, gravity, flap, ceiling/ground detection), procedurally spawned
-pipes (randomized gaps, timed spawning, off-screen recycling) and bird/pipe
-collision detection are implemented. Graphics are drawn with plain Pygame
-shapes — no external image or audio assets. Scoring, sounds and menus are
-intentionally left for later phases.
+pipes (randomized gaps, timed spawning, off-screen recycling), bird/pipe
+collision detection and scoring (one point per passed pipe plus a session high
+score) are implemented. Graphics are drawn with plain Pygame shapes — no
+external image or audio assets. Sounds and menus are intentionally left for
+later phases.
 
 ## Requirements
 
@@ -129,6 +130,49 @@ Spawning is capped at `PipeManager.MAX_SPAWNS_PER_UPDATE` (3) per tick, so a
 long stall or a debugger pause cannot flood the screen with pipes; the leftover
 timer debt is dropped instead of accumulating.
 
+`PipeManager` also takes optional `min_gap_center` / `max_gap_center`
+arguments (defaulting to the settings above) so a caller — or a test — can pin
+the gap range; the manager is otherwise identical to the configured behaviour.
+
+## Scoring
+
+`scoring.py` holds the only rule that awards points:
+
+```python
+count_newly_passed(player, pipes)   # -> int, how many pipes just went behind
+```
+
+A pipe counts as passed once it is **completely** behind the bird, meaning
+`player.x > pipe.x + pipe.width` (`Pipe.has_behind`). Passing a pipe **body**
+over the bird's column is therefore not enough, which is exactly the rule a
+player perceives.
+
+Exactly-once scoring relies on per-pipe state: each `Pipe` carries its own
+`scored` flag (default `False`), and the helper flips it when it pays out. That
+keeps the identity tied to the object, so three pipes that happen to share the
+same `x` are still tracked independently, and a pipe that is recycled off-screen
+is gone before it can be counted twice.
+
+`Game.update(dt)` orders its checks deliberately:
+
+1. `player.update(dt)` and `pipe_manager.update(dt)` move the world,
+2. the ceiling/ground and pipe collision tests run — on a hit, `game_over` is
+   latched and the method **returns immediately**,
+3. only then does the game award newly passed pipes.
+
+Because scoring is the last step, a crash on the same frame the bird clears a
+pipe still pays nothing, while `game_over` freezes `score` until the next
+`restart()`.
+
+`Game.score` is the running score and `Game.high_score` the best of the current
+process; both start at 0 and are plain writable attributes. `Game.add_score`
+is the only mutator, and it raises the high score with `max()`. A restart clears
+`score` but **keeps** `high_score`, so the best survives a crash; starting a
+brand-new `Game` starts both counters from zero again.
+
+The score is drawn with the built-in Pygame font at the top centre as
+`Score: N`; after a game over a `Best: N` line appears underneath it.
+
 ## Run the tests
 
 ```bash
@@ -137,8 +181,9 @@ python -m pytest
 
 The tests default to Pygame's headless `dummy` video driver, so they pass
 without a display. They cover the settings and window configuration, the
-player's gravity/jump behaviour, pipe geometry and spawning, and every collision
-edge case.
+player's gravity/jump behaviour, pipe geometry and spawning, every collision
+edge case, the scoring rule (including exactly-once and the crash frame) and
+the high-score lifecycle across restarts.
 
 ## Project structure
 
@@ -156,6 +201,7 @@ flappy_bird/
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
 │       ├── pipe_manager.py      # PipeManager: spawn timing, pipe list, recycling
 │       ├── collision.py         # bird/pipe hit tests
+│       ├── scoring.py           # counts pipes passed exactly once
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
@@ -171,9 +217,12 @@ flappy_bird/
   manager is injected with an `rng`, so tests can make spawning deterministic.
 - `collision.py` owns the hit rules and has no state, so every edge case is
   testable without a window.
+- `scoring.py` owns the payout rule; it reads and flips each pipe's own `scored`
+  flag, so "one point per pipe" cannot drift from the pipe objects themselves.
 - `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`,
-  asks `collision` whether the bird hit anything, and draws what the manager
-  holds. `Game.pipes` is a read-only view of the manager's live list.
+  asks `collision` whether the bird hit anything, awards what `scoring` reports
+  and draws what the manager holds. `Game.pipes` is a read-only view of the
+  manager's live list.
 - Every tunable value is a constant in `settings.py`.
 - `Game` exposes `handle_events()`, `update(dt)` and `render()` separately from
   `run()`, so individual stages can be driven in tests.
@@ -184,6 +233,5 @@ flappy_bird/
 
 ## Next steps
 
-- Increment the score when a pipe is passed (`Pipe.has_behind`).
 - Swap the placeholder shapes for real sprites and sound.
 

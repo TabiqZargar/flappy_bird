@@ -23,6 +23,8 @@ class PipeManager:
         spawn_interval: float = settings.PIPE_SPAWN_INTERVAL,
         speed: float = settings.PIPE_SPEED,
         spawn_x: float = settings.SCREEN_WIDTH,
+        min_gap_center: int = settings.PIPE_MIN_GAP_CENTER,
+        max_gap_center: int = settings.PIPE_MAX_GAP_CENTER,
         max_spawns_per_update: int = MAX_SPAWNS_PER_UPDATE,
         rng: random.Random | None = None,
     ) -> None:
@@ -31,6 +33,8 @@ class PipeManager:
         self.spawn_interval = spawn_interval
         self.speed = speed
         self.spawn_x = spawn_x
+        self.min_gap_center = min_gap_center
+        self.max_gap_center = max_gap_center
         self.max_spawns_per_update = max_spawns_per_update
         self.rng = rng or random.Random()
         self.pipes: list[Pipe] = []
@@ -49,7 +53,11 @@ class PipeManager:
         """Create a pipe at the right edge with a random gap and keep it."""
         pipe = Pipe(
             x=self.spawn_x,
-            gap_y=random_gap_center(rng=self.rng),
+            gap_y=random_gap_center(
+                min_center=self.min_gap_center,
+                max_center=self.max_gap_center,
+                rng=self.rng,
+            ),
             speed=self.speed,
         )
         self.pipes.append(pipe)

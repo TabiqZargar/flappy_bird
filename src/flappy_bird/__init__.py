@@ -6,6 +6,7 @@ from .game import Game
 from .pipe import Pipe
 from .pipe_manager import PipeManager
 from .player import Player
+from .scoring import count_newly_passed
 from .utils import clamp, centered_rect, frame_delta, random_gap_center
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "Player",
     "check_any_pipe_collision",
     "check_pipe_collision",
+    "count_newly_passed",
     "settings",
     "clamp",
     "centered_rect",

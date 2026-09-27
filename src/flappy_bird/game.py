@@ -11,6 +11,7 @@ from .collision import check_any_pipe_collision
 from .pipe import Pipe
 from .pipe_manager import PipeManager
 from .player import Player
+from .scoring import count_newly_passed
 from .utils import centered_rect, frame_delta
 
 
@@ -34,6 +35,7 @@ class Game:
         self.player = Player()
         self.pipe_manager = PipeManager()
         self.score = 0
+        self.high_score = 0
         self.running = False
         self.game_over = False
         self.has_flapped = False
@@ -69,6 +71,11 @@ class Game:
         self.score = 0
         self.game_over = False
         self.has_flapped = False
+
+    def add_score(self, points: int) -> None:
+        """Award points to the current score and keep the high score current."""
+        self.score += points
+        self.high_score = max(self.high_score, self.score)
 
     # --- Loop stages ---------------------------------------------------------
 
@@ -107,6 +114,9 @@ class Game:
             self.player, self.pipes
         ):
             self.game_over = True
+            return
+
+        self.add_score(count_newly_passed(self.player, self.pipes))
 
     # --- Rendering -----------------------------------------------------------
 
@@ -129,9 +139,18 @@ class Game:
         pygame.draw.rect(self.screen, settings.GROUND_COLOR, ground)
 
     def _draw_score(self) -> None:
-        label = self.score_font.render(str(self.score), True, settings.TEXT_COLOR)
-        x = (settings.SCREEN_WIDTH - label.get_width()) // 2
-        self.screen.blit(label, (x, settings.SCREEN_HEIGHT // 6))
+        label = self._render_text(f"Score: {self.score}")
+        self.screen.blit(label, self._centered_x(label, settings.SCORE_TEXT_Y))
+        if self.game_over:
+            best = self._render_text(f"Best: {self.high_score}")
+            best_y = settings.SCORE_TEXT_Y + label.get_height() + 4
+            self.screen.blit(best, self._centered_x(best, best_y))
+
+    def _render_text(self, text: str) -> pygame.Surface:
+        return self.score_font.render(text, True, settings.TEXT_COLOR)
+
+    def _centered_x(self, label: pygame.Surface, y: int) -> tuple[int, int]:
+        return ((settings.SCREEN_WIDTH - label.get_width()) // 2, y)
 
     def _draw_banner(self, title: str, subtitle: str) -> None:
         title_label = self.banner_font.render(title, True, settings.TEXT_COLOR)

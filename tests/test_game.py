@@ -11,6 +11,7 @@ from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
 from flappy_bird.pipe_manager import PipeManager
 from flappy_bird.player import Player
+from flappy_bird.scoring import count_newly_passed
 from flappy_bird.utils import clamp, random_gap_center
 
 DT = 1 / 60
@@ -695,6 +696,291 @@ class TestGameCollision:
         frozen_velocity = game.player.velocity_y
         game.flap()
         assert game.player.velocity_y == frozen_velocity
+
+
+class TestScoring:
+    """One point per pipe pair, awarded only after it is fully behind."""
+
+    def passed_pipe(self, x: int = 0, gap_y: int = 300) -> Pipe:
+        """A pipe sitting completely behind the bird's start column."""
+        return Pipe(x=x, gap_y=gap_y)
+
+    def upcoming_pipe(self, gap_y: int = 300) -> Pipe:
+        return Pipe(x=settings.SCREEN_WIDTH, gap_y=gap_y)
+
+    def test_pipe_starts_unscored(self):
+        assert self.passed_pipe().scored is False
+
+    def test_no_pipes_awards_nothing(self):
+        player = Player()
+        assert count_newly_passed(player, []) == 0
+
+    def test_bird_behind_a_pipe_awards_one_point(self):
+        player = Player()
+        assert count_newly_passed(player, [self.passed_pipe()]) == 1
+
+    def test_same_pipe_cannot_award_twice(self):
+        player = Player()
+        pipe = self.passed_pipe()
+        assert count_newly_passed(player, [pipe]) == 1
+        assert count_newly_passed(player, [pipe]) == 0
+        assert count_newly_passed(player, [pipe]) == 0
+
+    def test_pipe_ahead_of_the_bird_awards_nothing(self):
+        player = Player()
+        assert count_newly_passed(player, [self.upcoming_pipe()]) == 0
+
+    def test_bird_aligned_with_the_gap_awards_nothing(self):
+        player = Player()
+        overlapping = Pipe(x=settings.BIRD_START_X, gap_y=settings.BIRD_START_Y)
+        assert count_newly_passed(player, [overlapping]) == 0
+
+    def test_bird_flush_with_the_pipe_awards_nothing(self):
+        player = Player()
+        flush = Pipe(
+            x=settings.BIRD_START_X + player.radius + settings.PIPE_WIDTH,
+            gap_y=settings.BIRD_START_Y,
+        )
+        assert count_newly_passed(player, [flush]) == 0
+
+    def test_multiple_pipes_award_multiple_points(self):
+        player = Player()
+        pipes = [self.passed_pipe(x=0), self.passed_pipe(x=-20), self.passed_pipe()]
+        assert count_newly_passed(player, pipes) == 3
+
+    def test_only_the_newly_passed_pipes_are_counted(self):
+        player = Player()
+        behind = self.passed_pipe()
+        count_newly_passed(player, [behind])
+        mixed = [behind, self.upcoming_pipe(), self.passed_pipe(x=-80)]
+        assert count_newly_passed(player, mixed) == 1
+
+    def test_pipes_at_the_same_position_are_scored_independently(self):
+        player = Player()
+        pipes = [self.passed_pipe(), self.passed_pipe(), self.passed_pipe()]
+        assert count_newly_passed(player, pipes) == 3
+        assert all(pipe.scored for pipe in pipes)
+
+    def test_scoring_follows_pipes_as_they_move(self):
+        player = Player()
+        pipe = self.upcoming_pipe()
+        steps = 0
+        while not pipe.has_behind(player.x):
+            pipe.update(1 / 60)
+            steps += 1
+            if not pipe.has_behind(player.x):
+                assert count_newly_passed(player, [pipe]) == 0
+        assert steps > 0
+        assert count_newly_passed(player, [pipe]) == 1
+
+    def test_removed_pipe_does_not_disturb_a_new_one(self):
+        player = Player()
+        old = self.passed_pipe()
+        assert count_newly_passed(player, [old]) == 1
+        assert count_newly_passed(player, []) == 0
+        fresh = self.passed_pipe()
+        assert fresh.scored is False
+        assert count_newly_passed(player, [fresh]) == 1
+
+
+class TestHighScore:
+    def award(self, game: Game, points: int) -> None:
+        game.add_score(points)
+
+    def test_scores_start_at_zero(self, game):
+        assert game.score == 0
+        assert game.high_score == 0
+
+    def test_high_score_follows_a_new_best(self, game):
+        self.award(game, 3)
+        assert game.score == 3
+        assert game.high_score == 3
+
+    def test_high_score_tracks_the_peak(self, game):
+        self.award(game, 5)
+        assert game.high_score == 5
+
+    def test_lower_score_does_not_overwrite_high_score(self, game):
+        self.award(game, 5)
+        game.restart()
+        self.award(game, 2)
+        assert game.score == 2
+        assert game.high_score == 5
+
+    def test_restart_keeps_the_high_score_and_resets_the_score(self, game):
+        self.award(game, 4)
+        game.restart()
+        assert game.score == 0
+        assert game.high_score == 4
+
+    def test_equal_score_keeps_the_high_score(self, game):
+        self.award(game, 3)
+        game.restart()
+        self.award(game, 3)
+        assert game.high_score == 3
+
+    def test_awarding_zero_changes_nothing(self, game):
+        self.award(game, 2)
+        self.award(game, 0)
+        assert game.score == 2
+        assert game.high_score == 2
+
+    def test_new_game_instance_starts_at_zero(self, game):
+        self.award(game, 6)
+        fresh = Game(headless=True)
+        try:
+            assert fresh.score == 0
+            assert fresh.high_score == 0
+        finally:
+            pygame.quit()
+
+
+class TestGameScoring:
+    def add_passed_pipe(self, game: Game) -> Pipe:
+        pipe = Pipe(x=0, gap_y=settings.BIRD_START_Y)
+        game.pipe_manager.pipes.append(pipe)
+        return pipe
+
+    def test_score_and_high_score_start_at_zero(self, game):
+        assert game.score == 0
+        assert game.high_score == 0
+
+    def test_passing_one_pipe_scores_one_point(self, game):
+        self.add_passed_pipe(game)
+        game.update(DT)
+        assert game.score == 1
+        assert game.high_score == 1
+
+    def test_score_does_not_grow_every_frame(self, game):
+        self.add_passed_pipe(game)
+        game.update(DT)
+        for _ in range(30):
+            game.update(DT)
+        assert game.score == 1
+
+    def test_each_of_three_pipes_scores_once(self, game):
+        for _ in range(3):
+            self.add_passed_pipe(game)
+        game.update(DT)
+        assert game.score == 3
+        for _ in range(5):
+            game.update(DT)
+        assert game.score == 3
+
+    def test_pipes_ahead_of_the_bird_do_not_score(self, game):
+        game.pipe_manager.pipes.append(
+            Pipe(x=settings.SCREEN_WIDTH, gap_y=settings.BIRD_START_Y)
+        )
+        for _ in range(10):
+            game.update(DT)
+        assert game.score == 0
+
+    def test_score_freezes_after_game_over(self, game):
+        self.add_passed_pipe(game)
+        game.game_over = True
+        for _ in range(20):
+            game.update(DT)
+        assert game.score == 0
+
+    def test_collision_does_not_award_a_point(self, game):
+        pipe = Pipe(
+            x=settings.BIRD_START_X - 10,
+            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
+        )
+        game.pipe_manager.pipes.append(pipe)
+        game.update(DT)
+        assert game.game_over is True
+        assert game.score == 0
+        assert game.high_score == 0
+
+    def test_crash_frame_after_passing_keeps_no_point(self, game):
+        behind = Pipe(x=0, gap_y=settings.BIRD_START_Y)
+        deadly = Pipe(
+            x=settings.BIRD_START_X - 10,
+            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
+        )
+        game.pipe_manager.pipes.extend([behind, deadly])
+        game.update(DT)
+        assert game.game_over is True
+        assert game.score == 0
+
+    def test_high_score_survives_a_full_round(self, game):
+        for _ in range(3):
+            self.add_passed_pipe(game)
+        game.update(DT)
+        assert game.high_score == 3
+
+        game.game_over = True
+        for _ in range(20):
+            game.update(DT)
+        assert game.score == 3
+        assert game.high_score == 3
+
+    def test_restart_clears_scoring_state(self, game):
+        pipe = self.add_passed_pipe(game)
+        game.update(DT)
+        assert game.score == 1
+        assert pipe.scored is True
+
+        game.restart()
+        assert game.score == 0
+        assert game.high_score == 1
+        assert game.pipes == []
+
+        fresh = self.add_passed_pipe(game)
+        assert fresh.scored is False
+        game.update(DT)
+        assert game.score == 1
+
+    def test_score_keeps_climbing_across_a_long_run(self, game):
+        # Gaps fixed on the bird's flight band so a long run survives and
+        # every pipe that reaches the bird is passed.
+        game.pipe_manager = PipeManager(
+            spawn_interval=0.5,
+            min_gap_center=250,
+            max_gap_center=250,
+            rng=random.Random(1),
+        )
+        advance(game, 10.0)
+        assert game.game_over is False
+        # A pipe needs (400 - 30) / 120 = 3.083s to travel behind the bird, so
+        # the pipes spawned at 0.5s .. 6.5s are the 13 that score by t=10s.
+        assert game.score == 13
+        assert game.high_score == 13
+
+
+class TestScoreRendering:
+    def snapshot(self, game: Game) -> bytes:
+        game.render()
+        return pygame.image.tostring(game.screen, "RGB")
+
+    def test_score_renders_in_headless_mode(self, game):
+        assert self.snapshot(game)
+
+    def test_changing_the_score_changes_the_screen(self, game):
+        before = self.snapshot(game)
+        game.score = 1234
+        assert self.snapshot(game) != before
+
+    def test_game_over_renders_score_and_best(self, game):
+        game.score = 7
+        game.high_score = 42
+        game.game_over = True
+        assert self.snapshot(game)
+
+    def test_best_line_reflects_the_high_score(self, game):
+        game.game_over = True
+        game.score = 7
+        game.high_score = 42
+        with_best = self.snapshot(game)
+        game.high_score = 99
+        assert self.snapshot(game) != with_best
+
+    def test_best_is_hidden_during_play(self, game):
+        game.high_score = 42
+        playing = self.snapshot(game)
+        game.game_over = True
+        assert self.snapshot(game) != playing
 
 
 def test_clamp_bounds_values():
