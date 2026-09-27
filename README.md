@@ -10,7 +10,9 @@ score) and an explicit start/play/game-over state machine are implemented.
 The look is layered on top: a cached sky gradient, drifting parallax clouds, a
 scrolling textured ground, a tilted animated bird and capped, lit pipes, all
 drawn with plain Pygame shapes and the built-in font — no external image, font
-or audio assets. Sounds are intentionally left for a later phase.
+or audio assets. Four short arcade sound effects are synthesised from scratch
+at start-up, and `M` mutes them. Sounds are intentionally the only audio
+feature for now; there is no music.
 
 ## Requirements
 
@@ -57,6 +59,7 @@ $env:PYTHONPATH = "src"; python main.py
 | ------------------ | ----------------------------------------- |
 | `Space`/`Up`/`W`   | Start, flap, or restart                   |
 | Left mouse click   | Start, flap, or restart                   |
+| `M`                | Toggle mute                               |
 | `R`                | Restart                                   |
 | `Esc`              | Quit                                      |
 
@@ -225,6 +228,74 @@ Nothing expensive is rebuilt per frame:
 | `TextCache`    | text + font                | one per distinct label        |
 | `PanelCache`   | title + lines              | `MAX_PANELS` (24), LRU-ish    |
 
+## Audio
+
+`audio.py` owns every sound. There are no `.wav` or `.mp3` files: each effect is
+synthesised from scratch into 16-bit PCM when the mixer opens, so there is
+nothing to ship, load or fail to find.
+
+| Effect      | Sound                                            | Fires when                       |
+| ----------- | ------------------------------------------------ | -------------------------------- |
+| `flap`      | short bright blip, pitch rising                  | a flap actually lifts the bird   |
+| `score`     | two-tone chime rising a fifth                    | the score increases              |
+| `hit`       | filtered noise burst over a falling low thud     | the round enters `GAME_OVER`     |
+| `game_over` | three descending notes (C5 → G4 → D4)            | the round enters `GAME_OVER`     |
+
+`Game` owns the one `AudioManager` and translates gameplay events into calls on
+it — `audio.play_flap()`, `play_score()`, `play_hit()`, `play_game_over()`. No
+other module imports `audio.py` or touches `pygame.mixer`; the player, pipes,
+collision, scoring and visuals have no idea sound exists.
+
+Each effect is generated once per process and the buffers are shared, so
+starting another round never regenerates anything. The whole set is about 48 kB
+and takes roughly 20 ms to build.
+
+### Exactly one sound per event
+
+Sounds hang off events, never off frame conditions:
+
+- one flap → one `flap`, because `Game.flap` returns early outside `PLAYING`;
+- a start or restart press is a flap, so it sounds once, not twice;
+- one scoring event → one `score`, even if several pipes clear on the same frame
+  (a chime per point would just stack into a noise burst);
+- `Game.end_round()` is idempotent: it checks the state first, so the frozen
+  game-over screen can never replay the crash, however many frames it renders.
+
+### Mute and volume
+
+`M` toggles mute in every state. It touches nothing but the audio manager, so it
+cannot restart a round, move the bird or change the score.
+
+```python
+game.toggle_mute()      # -> new value
+game.audio.muted        # -> bool
+game.audio.toggle_mute()
+```
+
+Mute and volume are separate. `MASTER_VOLUME` (0.7) is the master level, clamped
+to `[0.0, 1.0]` on the way in and pushed down to every sound when it changes;
+`muted` is a boolean that stops sounds being played at all.
+
+```python
+game.audio.set_volume(0.4)   # clamped, so 5.0 -> 1.0 and -1.0 -> 0.0
+```
+
+### Headless and no-audio fallback
+
+Audio is decoration, so it can never end a run. If the mixer will not open — no
+sound card, a device another program is holding, a locked-down CI box — the
+manager reports `available == False`, every play call becomes a no-op, and the
+game plays on in silence. Every sound method swallows mixer errors, so an
+unexpected Pygame build cannot crash the loop either.
+
+`Game(headless=True)` skips the mixer entirely: nothing in an automated run
+could hear it, and opening and closing a device per test is pure overhead. Audio
+behaviour is tested with a fake mixer instead, so the suite never needs a sound
+device.
+
+The only format assumption is 16-bit signed PCM. If the mixer opens on anything
+else, the manager stays silent rather than playing noise.
+
 ## Collision
 
 `collision.py` holds the only collision rules, so they can be tested without a
@@ -341,7 +412,15 @@ cloud layout and wrapping, the ground band and its fixed collision line, the
 tilt curve and its clamps, wing animation from `dt`, the sprite caches, the
 panels and the score text, pipe shading, and — importantly — that rendering and
 updating the visuals never move the player, the pipes, the score or
-`Player.rect`. `317 passed` at the time of writing.
+`Player.rect`.
+
+`test_audio.py` adds 101 tests over the sound effects and their wiring: the
+shape of each generated buffer (length, no clipping, fades at both ends, the
+right direction of pitch), safe initialisation against a working mixer, a
+refusing mixer and a disabled manager, volume clamping, mute, and the fact that
+no gameplay module imports `audio` or mentions `pygame.mixer`. The game's own
+sound wiring is checked with a recording stand-in, so **no test needs a sound
+device**. `418 passed` at the time of writing.
 
 Two fixtures model the two situations: `game` is a round already in progress
 (what the gameplay tests drive), and `idle_game` is a fresh instance still
@@ -358,7 +437,8 @@ flappy_bird/
 │   └── flappy_bird/
 │       ├── __init__.py          # public API re-exports
 │       ├── game.py              # Game: window, main loop, input, update, render
-│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors)
+│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio)
+│       ├── audio.py             # AudioManager: generated effects, volume, mute
 │       ├── visuals.py           # Visuals: sky, clouds, ground, bird sprite, caches
 │       ├── player.py            # Player: position, velocity, flap, draw
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
@@ -370,7 +450,8 @@ flappy_bird/
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
     ├── test_game.py
-    └── test_visuals.py
+    ├── test_visuals.py
+    └── test_audio.py
 ```
 
 ## Design notes
@@ -389,6 +470,9 @@ flappy_bird/
 - `visuals.py` owns the look, and is the only module that both reads the state
   and holds caches. Because it cannot reach the player or the pipes, art changes
   are structurally incapable of altering the physics or the hitboxes.
+- `audio.py` owns the sound, and is deliberately the most defensive module in
+  the package: every entry point swallows mixer errors, because a broken sound
+  device is not a reason to stop playing.
 - `Game` stays thin: it calls `player.update(dt)` and `pipe_manager.update(dt)`,
   asks `collision` whether the bird hit anything, awards what `scoring` reports
   and draws what the manager holds. `Game.pipes` is a read-only view of the
@@ -403,7 +487,7 @@ flappy_bird/
 
 ## Next steps
 
-- Add sound (flap, score, hit) — still the only missing subsystem.
+- Background music, and a settings screen for volume.
 - Replace the procedural bird with a sprite sheet, keeping `BirdSprite`'s
   cached-surface interface so nothing else has to change.
 

@@ -95,6 +95,53 @@ BIRD_WING_REST_DEGREES = -34.0
 BIRD_WING_SWING_DEGREES = 66.0
 BIRD_SPRITE_MARGIN = 10
 
+# --- Audio -------------------------------------------------------------------
+
+#: Master volume in [0.0, 1.0], applied on top of the mute flag.
+MASTER_VOLUME = 0.7
+
+#: Small mono 16-bit format: cheap to generate, plenty for short arcade blips.
+AUDIO_FREQUENCY = 22050
+AUDIO_SIZE = -16
+AUDIO_CHANNELS = 1
+AUDIO_BUFFER = 512
+
+#: Flap: a short bright upward blip.
+FLAP_DURATION = 0.10
+FLAP_START_HZ = 520.0
+FLAP_END_HZ = 980.0
+FLAP_GAIN = 0.85
+
+#: Score: a two-tone chime rising a perfect fifth.
+SCORE_DURATION = 0.16
+SCORE_FIRST_HZ = 880.0
+SCORE_SECOND_HZ = 1320.0
+SCORE_TONE_SPLIT = 0.42
+SCORE_GAIN = 0.55
+
+#: Hit: a short filtered noise burst over a low thud.
+HIT_DURATION = 0.14
+HIT_START_HZ = 240.0
+HIT_END_HZ = 90.0
+HIT_GAIN = 0.50
+
+#: Game over: three descending notes, C5 -> G4 -> D4.
+GAME_OVER_DURATION = 0.55
+GAME_OVER_NOTES = ((0.0, 523.25), (0.38, 392.0), (0.70, 293.66))
+GAME_OVER_GAIN = 0.60
+#: Silence baked in front of the jingle so it follows the impact instead of
+#: landing on top of it. Pygame has no delayed-play call, so the gap is part of
+#: the sound itself.
+GAME_OVER_LEAD_IN = 0.14
+
+# --- Game feel ---------------------------------------------------------------
+
+#: The running score brightens briefly whenever a point is awarded.
+SCORE_PULSE_SECONDS = 0.28
+SCORE_PULSE_COLOR = (255, 214, 10)
+#: Quantises the pulse so the text cache gains a bounded number of variants.
+SCORE_PULSE_STEPS = 3
+
 # --- Ground visuals ---------------------------------------------------------
 
 GROUND_SOIL_COLOR = (198, 152, 104)

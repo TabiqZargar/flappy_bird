@@ -1,6 +1,7 @@
 """Flappy Bird - a small Pygame clone built on a modular scaffold."""
 
 from . import settings
+from .audio import AudioManager, pre_init_mixer, render_buffers
 from .collision import check_any_pipe_collision, check_pipe_collision
 from .game import Game
 from .pipe import Pipe
@@ -24,6 +25,7 @@ from .visuals import (
 )
 
 __all__ = [
+    "AudioManager",
     "Game",
     "GameState",
     "Pipe",
@@ -42,6 +44,8 @@ __all__ = [
     "check_pipe_collision",
     "count_newly_passed",
     "draw_bird",
+    "pre_init_mixer",
+    "render_buffers",
     "settings",
     "clamp",
     "centered_rect",

@@ -623,6 +623,7 @@ class Visuals:
         self.text = TextCache()
         self.panels = PanelCache()
         self._sky: pygame.Surface | None = None
+        self.score_pulse = 0.0
 
     # --- Animation -----------------------------------------------------------
 
@@ -643,6 +644,32 @@ class Visuals:
             self.ground.update(dt)
         if animate_bird:
             self.bird.update(dt)
+        if self.score_pulse > 0.0:
+            self.score_pulse = max(0.0, self.score_pulse - dt)
+
+    # --- Game feel -----------------------------------------------------------
+
+    def pulse_score(self) -> None:
+        """Flash the running score; purely decorative feedback for a point."""
+        self.score_pulse = settings.SCORE_PULSE_SECONDS
+
+    def score_color(self) -> tuple[int, int, int]:
+        """Text colour for the running score, brighter while the pulse lasts.
+
+        The blend is quantised to ``SCORE_PULSE_STEPS`` levels so the text cache
+        gains a handful of variants per score instead of one per frame.
+        """
+        fraction = self.score_pulse / settings.SCORE_PULSE_SECONDS
+        if fraction <= 0.0:
+            return settings.TEXT_COLOR
+        weight = round(fraction * settings.SCORE_PULSE_STEPS)
+        if weight <= 0:
+            return settings.TEXT_COLOR
+        weight /= settings.SCORE_PULSE_STEPS
+        return tuple(
+            round(base + (bright - base) * weight)
+            for base, bright in zip(settings.TEXT_COLOR, settings.SCORE_PULSE_COLOR)
+        )
 
     # --- Drawing -------------------------------------------------------------
 

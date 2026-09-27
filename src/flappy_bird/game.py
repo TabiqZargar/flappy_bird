@@ -7,6 +7,7 @@ import os
 import pygame
 
 from . import settings
+from .audio import AudioManager, pre_init_mixer
 from .collision import check_any_pipe_collision
 from .pipe import Pipe
 from .pipe_manager import PipeManager
@@ -42,6 +43,9 @@ class Game:
         if headless:
             os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
             os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        else:
+            # Must come before pygame.init(), which opens the mixer on its own.
+            pre_init_mixer()
 
         pygame.init()
         pygame.display.set_caption(settings.CAPTION)
@@ -56,6 +60,9 @@ class Game:
         self.player = Player()
         self.pipe_manager = PipeManager()
         self.visuals = Visuals()
+        # Headless runs get a silent manager: opening a device nobody can hear
+        # would only slow the suite down.
+        self.audio = AudioManager(enabled=not headless)
         self.state = GameState.START
         self.score = 0
         self.high_score = 0
@@ -142,6 +149,8 @@ class Game:
     def handle_keydown(self, key: int) -> None:
         if key == pygame.K_ESCAPE:
             self.running = False
+        elif key == pygame.K_m:
+            self.toggle_mute()
         elif key in FLAP_KEYS:
             self.handle_action()
         elif key == pygame.K_r:
@@ -151,6 +160,14 @@ class Game:
         """Left click acts; right and middle clicks are ignored."""
         if button == 1:
             self.handle_action()
+
+    def toggle_mute(self) -> bool:
+        """Flip the mute flag and report the new value.
+
+        Bound to ``M`` and valid in every state: it touches nothing but the audio
+        manager, so it can never disturb the round, the score or the physics.
+        """
+        return self.audio.toggle_mute()
 
     def handle_action(self) -> None:
         """Act on a flap press according to the current state.
@@ -169,6 +186,7 @@ class Game:
             return
         self.player.jump()
         self.has_flapped = True
+        self.audio.play_flap()
 
     # --- Loop stages ---------------------------------------------------------
 
@@ -193,10 +211,29 @@ class Game:
         if self.player.is_out_of_bounds or check_any_pipe_collision(
             self.player, self.pipes
         ):
-            self.state = GameState.GAME_OVER
+            self.end_round()
             return
 
-        self.add_score(count_newly_passed(self.player, self.pipes))
+        awarded = count_newly_passed(self.player, self.pipes)
+        if awarded:
+            self.add_score(awarded)
+            # One chime per scoring event, however many points it was worth, so
+            # simultaneous pipes cannot stack up into a noise burst.
+            self.audio.play_score()
+            self.visuals.pulse_score()
+
+    def end_round(self) -> None:
+        """Move to ``GAME_OVER`` and announce it exactly once.
+
+        The guard is what makes the sequence idempotent: ``update`` returns
+        immediately afterwards, so a frozen game-over screen can never replay the
+        crash sounds.
+        """
+        if self.state is GameState.GAME_OVER:
+            return
+        self.state = GameState.GAME_OVER
+        self.audio.play_hit()
+        self.audio.play_game_over()
 
     # --- Rendering -----------------------------------------------------------
 
@@ -245,11 +282,10 @@ class Game:
         self.visuals.draw_ground(self.screen)
 
     def _draw_score(self) -> None:
-        label = self._render_text(f"Score: {self.score}")
+        label = self.visuals.text.render(
+            self.score_font, f"Score: {self.score}", self.visuals.score_color()
+        )
         self.screen.blit(label, self._centered_x(label, settings.SCORE_TEXT_Y))
-
-    def _render_text(self, text: str) -> pygame.Surface:
-        return self.visuals.text.render(self.score_font, text)
 
     def _centered_x(self, label: pygame.Surface, y: int) -> tuple[int, int]:
         return ((settings.SCREEN_WIDTH - label.get_width()) // 2, y)
