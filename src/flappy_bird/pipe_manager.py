@@ -193,8 +193,7 @@ class PipeManager:
 
         spawned = 0
         while (
-            self.elapsed >= self.spawn_interval
-            and spawned < self.max_spawns_per_update
+            self.elapsed >= self.spawn_interval and spawned < self.max_spawns_per_update
         ):
             self.spawn()
             self.elapsed -= self.spawn_interval

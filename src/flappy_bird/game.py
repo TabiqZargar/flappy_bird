@@ -57,9 +57,7 @@ class Game:
         self.score_font = pygame.font.Font(None, settings.SCORE_FONT_SIZE)
         self.banner_font = pygame.font.Font(None, settings.BANNER_FONT_SIZE)
         self.title_font = pygame.font.Font(None, settings.TITLE_FONT_SIZE)
-        self.difficulty_font = pygame.font.Font(
-            None, settings.DIFFICULTY_FONT_SIZE
-        )
+        self.difficulty_font = pygame.font.Font(None, settings.DIFFICULTY_FONT_SIZE)
 
         self.player = Player()
         self.pipe_manager = PipeManager()

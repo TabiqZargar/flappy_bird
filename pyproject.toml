@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flappy-bird"
+dynamic = ["version"]
+description = "A minimal, modular Pygame Flappy Bird with procedural visuals, sound and progressive difficulty."
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["pygame", "game", "flappy-bird", "arcade"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment :: Arcade",
+    "Typing :: Typed",
+]
+dependencies = ["pygame>=2.5.0,<3.0.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "ruff>=0.6.0", "mypy>=1.10"]
+
+[project.scripts]
+flappy-bird = "flappy_bird.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The version is declared once, in flappy_bird/__init__.py, so the installed
+# metadata can never drift from what the package reports at runtime.
+[tool.setuptools.dynamic]
+version = { attr = "flappy_bird.__version__" }
+
+[tool.setuptools.package-data]
+flappy_bird = ["py.typed"]
+
+# --- Formatting -------------------------------------------------------------
+# One formatter for the whole project: `ruff format` (Black-compatible).
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+# The README's code samples are hand-aligned so the comments line up and read as a
+# table; a formatter collapsing them would make the docs worse, not better.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# Deliberately small. These four families catch real defects -- unused imports
+# and undefined names (F), formatting and import order (E, I), and the obvious
+# mistakes in bugbear (B) -- without burying the code in style noise.
+select = ["E", "F", "I", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["flappy_bird"]
+
+[tool.ruff.format]
+docstring-code-format = false
+
+# --- Type checking ----------------------------------------------------------
+# Pygame ships no type information, so it is treated as an untyped third-party
+# import rather than letting its absence fail every line that touches a Surface.
+
+[[tool.mypy.overrides]]
+module = ["pygame", "pygame.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "main.py"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+warn_no_return = true
+
+# --- Tests ------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+# A typo'd marker should be an error, not a silently skipped test.
+addopts = "--strict-markers"

@@ -129,7 +129,11 @@ def pitch(buffer: bytes, rate: int, start: float = 0.0, end: float = 1.0) -> flo
     low = int(len(values) * start)
     high = int(len(values) * end)
     chunk = values[low:high]
-    crossings = sum(1 for a, b in zip(chunk, chunk[1:]) if a <= 0 < b)
+    # Each sample is compared with the one after it, so the two views are
+    # deliberately one element shorter than `chunk`.
+    crossings = sum(
+        1 for a, b in zip(chunk, chunk[1:], strict=False) if a <= 0 < b
+    )
     seconds = (high - low) / rate
     return crossings / seconds if seconds else 0.0
 
@@ -580,9 +584,7 @@ class TestGameOverSounds:
         assert game.audio.count("game_over") == 1
 
     def test_a_crashing_frame_pays_nothing_and_says_nothing(self, game):
-        game.pipe_manager.pipes.append(
-            Pipe(x=0, gap_y=settings.BIRD_START_Y)
-        )
+        game.pipe_manager.pipes.append(Pipe(x=0, gap_y=settings.BIRD_START_Y))
         crash(game)
         assert game.score == 0
         assert game.audio.count("score") == 0

@@ -79,9 +79,8 @@ def _flap_voice(count: int, rate: int) -> list[float]:
     samples = []
     for index in range(count):
         t = index / rate
-        phase += 2.0 * math.pi * _glide(t / duration,
-                                        settings.FLAP_START_HZ,
-                                        settings.FLAP_END_HZ) / rate
+        frequency = _glide(t / duration, settings.FLAP_START_HZ, settings.FLAP_END_HZ)
+        phase += 2.0 * math.pi * frequency / rate
         samples.append(
             settings.FLAP_GAIN * math.sin(phase) * _envelope(t, 0.004, decay)
         )
@@ -128,9 +127,8 @@ def _hit_voice(count: int, rate: int, rng: random.Random | None = None) -> list[
         t = index / rate
         # A one-pole lowpass turns white noise into something with a body.
         noise += (rng.uniform(-1.0, 1.0) - noise) * 0.35
-        phase += 2.0 * math.pi * _glide(t / duration,
-                                        settings.HIT_START_HZ,
-                                        settings.HIT_END_HZ) / rate
+        frequency = _glide(t / duration, settings.HIT_START_HZ, settings.HIT_END_HZ)
+        phase += 2.0 * math.pi * frequency / rate
         value = math.sin(phase) * 0.8 + noise * 0.6
         samples.append(settings.HIT_GAIN * value * _envelope(t, 0.001, decay))
     return samples

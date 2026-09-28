@@ -172,9 +172,7 @@ class TestPlayerPhysics:
     def test_velocity_is_frame_rate_independent(self):
         coarse = simulate(0.5, 1 / 30)
         fine = simulate(0.5, 1 / 120)
-        assert coarse.velocity_y == pytest.approx(
-            settings.GRAVITY * 0.5, rel=1e-6
-        )
+        assert coarse.velocity_y == pytest.approx(settings.GRAVITY * 0.5, rel=1e-6)
         assert fine.velocity_y == pytest.approx(coarse.velocity_y, rel=1e-6)
 
     def test_displacement_is_frame_rate_independent(self):

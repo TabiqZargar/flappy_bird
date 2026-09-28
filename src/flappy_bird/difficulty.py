@@ -77,10 +77,7 @@ def _build_profiles() -> tuple[DifficultyProfile, ...]:
                 settings.DIFFICULTY_MAX_SPEED,
             ),
             pipe_gap=max(
-                int(
-                    settings.PIPE_GAP_SIZE
-                    - level * settings.DIFFICULTY_GAP_DECREMENT
-                ),
+                int(settings.PIPE_GAP_SIZE - level * settings.DIFFICULTY_GAP_DECREMENT),
                 settings.DIFFICULTY_MIN_GAP,
             ),
             spawn_interval=max(

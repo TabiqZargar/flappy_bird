@@ -20,9 +20,10 @@ a little faster, a little tighter, a little more often, up to a bounded maximum.
 ## Requirements
 
 - Python 3.11 or newer
-- The packages in `requirements.txt` (Pygame, pytest)
 
 ## Install
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
@@ -38,22 +39,34 @@ source .venv/bin/activate
 .venv\Scripts\Activate.ps1
 ```
 
-Then install the dependencies:
+Then install the game itself, in editable mode, together with its runtime
+dependency and development tools:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
+```
+
+That step is what puts the `flappy_bird` package (which lives in `src/`) on the
+import path, so no `PYTHONPATH` juggling is needed afterwards. The only runtime
+dependency is Pygame; `pyproject.toml` is the single source of truth for it.
+
+To install just the game, without the development tools:
+
+```bash
+python -m pip install -e .
 ```
 
 ## Run the game
 
-The game code lives in `src/`, so `src` must be on the import path:
+```bash
+python main.py
+```
+
+Two equivalent shortcuts, both using the same launcher:
 
 ```bash
-# macOS / Linux
-PYTHONPATH=src python main.py
-
-# Windows (PowerShell)
-$env:PYTHONPATH = "src"; python main.py
+python -m flappy_bird   # module entry point
+flappy-bird            # console script (after the Scripts/bin dir is on PATH)
 ```
 
 ### Controls
@@ -491,6 +504,9 @@ The score is drawn with the built-in Pygame font at the top centre as
 python -m pytest
 ```
 
+`pyproject.toml` points `testpaths` at `tests/`, so plain `python -m pytest` from
+the repository root is enough — the 531 tests are found without naming a path.
+
 The tests default to Pygame's headless `dummy` video driver, so they pass
 without a display. They cover the settings and window configuration, the
 player's gravity/jump behaviour, pipe geometry and spawning, every collision
@@ -533,11 +549,14 @@ waiting in `START`.
 ```
 flappy_bird/
 ├── main.py                      # entry point: builds and runs the Game
-├── requirements.txt
+├── pyproject.toml               # packaging, metadata and tooling config
+├── requirements.txt             # thin pointer to the project's own deps
 ├── README.md
 ├── src/
 │   └── flappy_bird/
 │       ├── __init__.py          # public API re-exports
+│       ├── __main__.py          # `python -m flappy_bird` / the flappy-bird script
+│       ├── py.typed             # PEP 561 marker: the package ships its types
 │       ├── game.py              # Game: window, main loop, input, update, render
 │       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio, difficulty)
 │       ├── audio.py             # AudioManager: generated effects, volume, mute
@@ -558,9 +577,15 @@ flappy_bird/
     └── test_difficulty.py
 ```
 
+The package is a standard [src layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/):
+the importable code lives in `src/`, never at the repository root, so there is
+exactly one copy of it on the import path whether it was installed or not.
+
 ## Design notes
 
 - `main.py` only initialises and runs `Game`; all logic lives in the package.
+- Dependencies are declared exactly once, in `pyproject.toml`; `requirements.txt`
+  just defers to it, so the two can never disagree.
 - `Player` owns its own physics (position, velocity, boundaries) and knows
   nothing about the game loop, pipes or rendering order.
 - `Pipe` owns geometry and movement; `PipeManager` owns *when* pipes exist. The

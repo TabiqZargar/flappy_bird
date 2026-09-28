@@ -7,6 +7,7 @@ pipes already in flight.
 """
 
 import ast
+import dataclasses
 import random
 
 import pygame
@@ -241,7 +242,7 @@ class TestProfilesAreBounded:
             assert profile.pipe_gap <= settings.GROUND_TOP - settings.CEILING_Y
 
     def test_profiles_are_immutable(self):
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             PROFILES[0].pipe_gap = 1  # type: ignore[misc]
 
     def test_profiles_compare_by_value(self):
@@ -267,7 +268,8 @@ class TestProgressionIsMonotonic:
         assert intervals == sorted(intervals, reverse=True)
 
     def test_every_level_differs_from_the_one_before(self):
-        for previous, current in zip(PROFILES, PROFILES[1:]):
+        # Each level is paired with the next one, so the tail is one shorter.
+        for previous, current in zip(PROFILES, PROFILES[1:], strict=False):
             assert (current.pipe_speed, current.pipe_gap, current.spawn_interval) != (
                 previous.pipe_speed,
                 previous.pipe_gap,
@@ -659,7 +661,11 @@ class TestGameDifficulty:
         game.sync_difficulty()
         game.player.jump()
         game.update(DT)
-        assert (settings.GRAVITY, settings.JUMP_VELOCITY, settings.MAX_FALL_SPEED) == feel
+        assert (
+            settings.GRAVITY,
+            settings.JUMP_VELOCITY,
+            settings.MAX_FALL_SPEED,
+        ) == feel
 
     def test_the_same_score_produces_the_same_fall(self, game):
         hard = Game(headless=True)
@@ -744,9 +750,7 @@ class TestDifficultyIsIsolated:
 
     def names(self, name: str) -> set[str]:
         return {
-            node.id
-            for node in ast.walk(self.tree(name))
-            if isinstance(node, ast.Name)
+            node.id for node in ast.walk(self.tree(name)) if isinstance(node, ast.Name)
         }
 
     def test_the_isolated_modules_do_not_import_difficulty(self):
@@ -824,12 +828,11 @@ class TestDifficultyIsIsolated:
         ]
         assert [node.name for node in classes] == ["DifficultyProfile"]
         decorators = [
-            decorator
-            for node in classes
-            for decorator in node.decorator_list
+            decorator for node in classes for decorator in node.decorator_list
         ]
         assert any(
-            isinstance(d, ast.Call) and getattr(d.func, "id", "") == "dataclass"
+            isinstance(d, ast.Call)
+            and getattr(d.func, "id", "") == "dataclass"
             and any(kw.arg == "frozen" and kw.value.value is True for kw in d.keywords)
             for d in decorators
         )

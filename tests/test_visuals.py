@@ -85,9 +85,13 @@ class TestSky:
 
     def test_draw_sky_paints_the_gradient(self, visuals, surface):
         visuals.draw_sky(surface)
-        assert snapshot(surface) != bytes(surface.get_width() * surface.get_height() * 3)
+        assert snapshot(surface) != bytes(
+            surface.get_width() * surface.get_height() * 3
+        )
 
-    def test_sky_covers_the_whole_screen_including_the_ground_band(self, visuals, surface):
+    def test_sky_covers_the_whole_screen_including_the_ground_band(
+        self, visuals, surface
+    ):
         visuals.draw_sky(surface)
         assert (
             surface.get_at((10, settings.SCREEN_HEIGHT - 1))[:3]
@@ -274,8 +278,10 @@ class TestBirdTilt:
     def test_cached_angles_sit_inside_the_limits(self):
         sprite = BirdSprite()
         for angle in sprite.cached_angles():
-            assert settings.BIRD_TILT_MIN_DEGREES <= angle <= (
-                settings.BIRD_TILT_MAX_DEGREES
+            assert (
+                settings.BIRD_TILT_MIN_DEGREES
+                <= angle
+                <= (settings.BIRD_TILT_MAX_DEGREES)
             )
 
     def test_tilt_index_falls_as_the_bird_sinks(self):
@@ -544,7 +550,8 @@ class TestStateRenderingStillWorks:
     def test_ground_renders_below_the_pipes(self, game):
         game.render()
         assert (
-            game.screen.get_at((10, settings.GROUND_TOP + 5))[:3] == settings.GROUND_COLOR
+            game.screen.get_at((10, settings.GROUND_TOP + 5))[:3]
+            == settings.GROUND_COLOR
         )
 
     def test_repeated_renders_are_identical(self, game):

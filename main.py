@@ -1,11 +1,10 @@
-"""Entry point: initialise Pygame and run the game."""
+"""Entry point: ``python main.py`` from the repository root.
 
-from flappy_bird.game import Game
+Run ``python -m pip install -e .`` once first, which is what puts ``flappy_bird``
+on the import path. Everything else lives in the package.
+"""
 
-
-def main() -> None:
-    Game().run()
-
+from flappy_bird import Game
 
 if __name__ == "__main__":
-    main()
+    Game().run()

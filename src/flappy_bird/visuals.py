@@ -162,7 +162,7 @@ def build_sky(
             (0, index),
             tuple(
                 round(top + (bottom - top) * fraction)
-                for top, bottom in zip(top_color, bottom_color)
+                for top, bottom in zip(top_color, bottom_color, strict=True)
             ),
         )
     return pygame.transform.scale(strip, (width, height))
@@ -231,9 +231,7 @@ class CloudField:
 
     def _make_cloud(self, index: int, count: int, layers: int) -> Cloud:
         layer = index % max(layers, 1)
-        scale = self.rng.uniform(
-            settings.CLOUD_MIN_SCALE, settings.CLOUD_MAX_SCALE
-        )
+        scale = self.rng.uniform(settings.CLOUD_MIN_SCALE, settings.CLOUD_MAX_SCALE)
         image = build_cloud(scale)
         speed = settings.CLOUD_BASE_SPEED + layer * settings.CLOUD_LAYER_SPEED_STEP
         # Spread the starting positions so they do not arrive in a clump.
@@ -246,9 +244,7 @@ class CloudField:
         for cloud in self.clouds:
             cloud.update(dt)
             if cloud.is_off_screen:
-                cloud.recycle(
-                    self.width + settings.CLOUD_SURPLUS_X
-                )
+                cloud.recycle(self.width + settings.CLOUD_SURPLUS_X)
 
     def draw(self, surface: pygame.Surface) -> None:
         for cloud in self.clouds:
@@ -272,9 +268,7 @@ def build_cloud(
     image = pygame.Surface((width, height), pygame.SRCALPHA)
 
     # A flat, slightly darker base keeps the cloud sitting on its own shadow.
-    pygame.draw.ellipse(
-        image, shade, pygame.Rect(0, height // 2, width, height // 2)
-    )
+    pygame.draw.ellipse(image, shade, pygame.Rect(0, height // 2, width, height // 2))
     puffs = (
         (0.16, 0.62, 0.46),
         (0.42, 0.44, 0.62),
@@ -508,9 +502,7 @@ class BirdSprite:
         # Body.
         body = pygame.Rect(0, 0, size, size)
         body.center = (round(center), round(center))
-        pygame.draw.ellipse(
-            image, settings.BIRD_OUTLINE_COLOR, body.inflate(4, 4)
-        )
+        pygame.draw.ellipse(image, settings.BIRD_OUTLINE_COLOR, body.inflate(4, 4))
         pygame.draw.ellipse(image, settings.BIRD_COLOR, body)
 
         # Belly highlight along the bottom of the body.
@@ -589,8 +581,10 @@ class BirdSprite:
         wing = pygame.transform.rotate(wing, angle)
 
         shoulder = (round(center - radius * 0.15), round(center + radius * 0.05))
-        image.blit(wing, (shoulder[0] - wing.get_width() // 2,
-                          shoulder[1] - wing.get_height() // 2))
+        image.blit(
+            wing,
+            (shoulder[0] - wing.get_width() // 2, shoulder[1] - wing.get_height() // 2),
+        )
 
     def clear(self) -> None:
         self._frames.clear()
@@ -668,7 +662,9 @@ class Visuals:
         weight /= settings.SCORE_PULSE_STEPS
         return tuple(
             round(base + (bright - base) * weight)
-            for base, bright in zip(settings.TEXT_COLOR, settings.SCORE_PULSE_COLOR)
+            for base, bright in zip(
+                settings.TEXT_COLOR, settings.SCORE_PULSE_COLOR, strict=True
+            )
         )
 
     # --- Drawing -------------------------------------------------------------

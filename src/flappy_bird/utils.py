@@ -38,9 +38,7 @@ def random_gap_center(
     return (rng or random).randint(lowest, highest)
 
 
-def centered_rect(
-    rect, surface_size: Sequence[int]
-) -> tuple[int, int]:
+def centered_rect(rect, surface_size: Sequence[int]) -> tuple[int, int]:
     """Return the top-left corner that centers ``rect`` (Rect or Surface) on ``surface_size``."""
     width, height = rect.get_size()
     surface_width, surface_height = surface_size
