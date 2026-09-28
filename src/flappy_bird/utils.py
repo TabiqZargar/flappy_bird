@@ -1,9 +1,26 @@
 """Small dependency-free helpers shared across modules."""
 
 import random
-from typing import Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from . import settings
+
+
+class _Ticker(Protocol):
+    """The part of ``pygame.time.Clock`` that :func:`frame_delta` needs.
+
+    Declared here so this module keeps no Pygame import at all, while still
+    saying exactly what it expects of the object it is handed.
+    """
+
+    def tick(self, fps: int) -> int: ...
+
+
+class _Sized(Protocol):
+    """Anything with a ``get_size()``: a ``Rect``, a ``Surface``, anything else."""
+
+    def get_size(self) -> tuple[int, int]: ...
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -13,7 +30,7 @@ def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
-def frame_delta(clock, fps: int = settings.FPS) -> float:
+def frame_delta(clock: _Ticker, fps: int = settings.FPS) -> float:
     """Advance ``clock`` and return a clamped frame delta in seconds."""
     seconds = clock.tick(fps) / 1000.0
     return clamp(seconds, 0.0, settings.MAX_FRAME_TIME)
@@ -38,8 +55,8 @@ def random_gap_center(
     return (rng or random).randint(lowest, highest)
 
 
-def centered_rect(rect, surface_size: Sequence[int]) -> tuple[int, int]:
-    """Return the top-left corner that centers ``rect`` (Rect or Surface) on ``surface_size``."""
+def centered_rect(rect: _Sized, surface_size: Sequence[int]) -> tuple[int, int]:
+    """Return the top-left corner that centers ``rect`` on ``surface_size``."""
     width, height = rect.get_size()
     surface_width, surface_height = surface_size
     return (

@@ -18,7 +18,7 @@ from .pipe_manager import PipeManager
 from .player import Player
 from .scoring import count_newly_passed
 from .state import GameState
-from .utils import clamp, centered_rect, frame_delta, random_gap_center
+from .utils import centered_rect, clamp, frame_delta, random_gap_center
 from .visuals import (
     BirdSprite,
     Cloud,

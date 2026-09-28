@@ -14,31 +14,7 @@ from flappy_bird.player import Player
 from flappy_bird.scoring import count_newly_passed
 from flappy_bird.state import GameState
 from flappy_bird.utils import clamp, random_gap_center
-
-DT = 1 / 60
-
-
-@pytest.fixture()
-def game():
-    """A game with a round already under way.
-
-    The physics, pipe, collision and scoring tests all drive a live round, so
-    the fixture starts one; the start-screen behaviour gets its own fixture.
-    """
-    instance = Game(headless=True)
-    instance.start_round()
-    pygame.event.clear()
-    yield instance
-    pygame.quit()
-
-
-@pytest.fixture()
-def idle_game():
-    """A freshly constructed game, still waiting in the START state."""
-    instance = Game(headless=True)
-    pygame.event.clear()
-    yield instance
-    pygame.quit()
+from tests.helpers import DT, add_passed_pipe, advance, crash
 
 
 def post_event(event_type: int, **attributes) -> None:
@@ -51,21 +27,6 @@ def simulate(seconds: float, dt: float) -> Player:
     for _ in range(round(seconds / dt)):
         player.update(dt)
     return player
-
-
-def advance(game: Game, seconds: float, dt: float = DT, render: bool = False) -> None:
-    """Step the game for ``seconds`` of game time, keeping the bird alive.
-
-    Flapping only when the bird sinks below its start height holds a steady
-    altitude, so the run never ends on game over and the pipe system keeps
-    advancing.
-    """
-    for _ in range(round(seconds / dt)):
-        if game.player.y > settings.BIRD_START_Y:
-            game.flap()
-        game.update(dt)
-        if render:
-            game.render()
 
 
 class TestSettings:
@@ -850,23 +811,18 @@ class TestHighScore:
 
 
 class TestGameScoring:
-    def add_passed_pipe(self, game: Game) -> Pipe:
-        pipe = Pipe(x=0, gap_y=settings.BIRD_START_Y)
-        game.pipe_manager.pipes.append(pipe)
-        return pipe
-
     def test_score_and_high_score_start_at_zero(self, game):
         assert game.score == 0
         assert game.high_score == 0
 
     def test_passing_one_pipe_scores_one_point(self, game):
-        self.add_passed_pipe(game)
+        add_passed_pipe(game)
         game.update(DT)
         assert game.score == 1
         assert game.high_score == 1
 
     def test_score_does_not_grow_every_frame(self, game):
-        self.add_passed_pipe(game)
+        add_passed_pipe(game)
         game.update(DT)
         for _ in range(30):
             game.update(DT)
@@ -874,7 +830,7 @@ class TestGameScoring:
 
     def test_each_of_three_pipes_scores_once(self, game):
         for _ in range(3):
-            self.add_passed_pipe(game)
+            add_passed_pipe(game)
         game.update(DT)
         assert game.score == 3
         for _ in range(5):
@@ -890,7 +846,7 @@ class TestGameScoring:
         assert game.score == 0
 
     def test_score_freezes_after_game_over(self, game):
-        self.add_passed_pipe(game)
+        add_passed_pipe(game)
         game.game_over = True
         for _ in range(20):
             game.update(DT)
@@ -920,7 +876,7 @@ class TestGameScoring:
 
     def test_high_score_survives_a_full_round(self, game):
         for _ in range(3):
-            self.add_passed_pipe(game)
+            add_passed_pipe(game)
         game.update(DT)
         assert game.high_score == 3
 
@@ -931,7 +887,7 @@ class TestGameScoring:
         assert game.high_score == 3
 
     def test_restart_clears_scoring_state(self, game):
-        pipe = self.add_passed_pipe(game)
+        pipe = add_passed_pipe(game)
         game.update(DT)
         assert game.score == 1
         assert pipe.scored is True
@@ -941,7 +897,7 @@ class TestGameScoring:
         assert game.high_score == 1
         assert game.pipes == []
 
-        fresh = self.add_passed_pipe(game)
+        fresh = add_passed_pipe(game)
         assert fresh.scored is False
         game.update(DT)
         assert game.score == 1
@@ -1016,17 +972,6 @@ def press(game: Game, key: int) -> None:
 def click(game: Game, button: int = 1) -> None:
     post_event(pygame.MOUSEBUTTONDOWN, button=button, pos=(10, 10))
     game.handle_events()
-
-
-def crash(game: Game) -> None:
-    """Force an immediate collision on the next update."""
-    game.pipe_manager.pipes.append(
-        Pipe(
-            x=settings.BIRD_START_X - 10,
-            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
-        )
-    )
-    game.update(DT)
 
 
 class TestGameStateEnum:

@@ -19,8 +19,8 @@ from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
 from flappy_bird.state import GameState
 from flappy_bird.visuals import Visuals
+from tests.helpers import DT, add_passed_pipe, crash
 
-DT = 1 / 60
 RATE = settings.AUDIO_FREQUENCY
 
 
@@ -131,9 +131,7 @@ def pitch(buffer: bytes, rate: int, start: float = 0.0, end: float = 1.0) -> flo
     chunk = values[low:high]
     # Each sample is compared with the one after it, so the two views are
     # deliberately one element shorter than `chunk`.
-    crossings = sum(
-        1 for a, b in zip(chunk, chunk[1:], strict=False) if a <= 0 < b
-    )
+    crossings = sum(1 for a, b in zip(chunk, chunk[1:], strict=False) if a <= 0 < b)
     seconds = (high - low) / rate
     return crossings / seconds if seconds else 0.0
 
@@ -145,24 +143,6 @@ def post(game: Game, event_type: int, **attributes) -> None:
 def press(game: Game, key: int) -> None:
     post(game, pygame.KEYDOWN, key=key)
     game.handle_events()
-
-
-def add_passed_pipe(game: Game) -> Pipe:
-    """A pipe already fully behind the bird, so the next update scores it."""
-    pipe = Pipe(x=0, gap_y=settings.BIRD_START_Y)
-    game.pipe_manager.pipes.append(pipe)
-    return pipe
-
-
-def crash(game: Game) -> None:
-    """Force a collision on the next update."""
-    game.pipe_manager.pipes.append(
-        Pipe(
-            x=settings.BIRD_START_X - 10,
-            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
-        )
-    )
-    game.update(DT)
 
 
 @pytest.fixture()

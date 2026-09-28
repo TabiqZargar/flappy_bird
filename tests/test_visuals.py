@@ -10,7 +10,6 @@ import pygame
 import pytest
 
 from flappy_bird import settings
-from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
 from flappy_bird.state import GameState
 from flappy_bird.visuals import (
@@ -22,8 +21,7 @@ from flappy_bird.visuals import (
     build_sky,
     tilt_for_velocity,
 )
-
-DT = 1 / 60
+from tests.helpers import DT
 
 
 @pytest.fixture(autouse=True)
@@ -41,14 +39,6 @@ def surface():
 @pytest.fixture()
 def visuals():
     yield Visuals(rng=random.Random(7))
-
-
-@pytest.fixture()
-def game():
-    instance = Game(headless=True)
-    instance.start_round()
-    pygame.event.clear()
-    yield instance
 
 
 def snapshot(target: pygame.Surface) -> bytes:
@@ -314,7 +304,7 @@ class TestBirdSprite:
 
     def test_wing_index_stays_in_range(self):
         sprite = BirdSprite()
-        for step in range(200):
+        for _ in range(200):
             sprite.update(0.037)
             assert 0 <= sprite.wing_index < sprite.wing_frames
 
@@ -400,8 +390,9 @@ class TestVisualsDoNotTouchGameplay:
         assert rect.width == rect.height == settings.BIRD_SIZE
 
     def test_hitbox_is_the_same_for_every_tilt(self, game):
-        game.player.rect  # touch it once so nothing looks cached
-        rects = set()
+        # Read the hitbox once before the loop, so anything the property might
+        # cache is already warm and the comparison below is only about rotation.
+        rects = {tuple(game.player.rect)}
         for velocity in (-520, -200, 0, 200, 520, 750):
             game.player.velocity_y = float(velocity)
             game.render()

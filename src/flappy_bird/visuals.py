@@ -12,11 +12,18 @@ The only per-frame work is arithmetic and a handful of ``blit`` calls.
 from __future__ import annotations
 
 import random
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import pygame
 
 from . import settings
-from .utils import clamp, centered_rect
+from .utils import centered_rect, clamp
+
+if TYPE_CHECKING:
+    # For type checking only: `player` imports this module, so a runtime import
+    # of Player here would be circular.
+    from .player import Player
 
 # --- Text -------------------------------------------------------------------
 
@@ -37,7 +44,7 @@ class TextCache:
         text: str,
         color: tuple[int, int, int] = settings.TEXT_COLOR,
     ) -> pygame.Surface:
-        key = (id(font), text, tuple(color))
+        key = (id(font), text, color)
         surface = self._surfaces.get(key)
         if surface is None:
             surface = font.render(text, True, color)
@@ -143,6 +150,22 @@ class PanelCache:
 # --- Sky --------------------------------------------------------------------
 
 
+def blend_color(
+    start: tuple[int, int, int], end: tuple[int, int, int], weight: float
+) -> tuple[int, int, int]:
+    """Linearly blend two RGB colours, quantised to whole channels.
+
+    ``weight`` of 0.0 gives ``start`` and 1.0 gives ``end``. Rounding per
+    channel is what lets the text cache reuse surfaces instead of building a
+    new one per frame.
+    """
+    return (
+        round(start[0] + (end[0] - start[0]) * weight),
+        round(start[1] + (end[1] - start[1]) * weight),
+        round(start[2] + (end[2] - start[2]) * weight),
+    )
+
+
 def build_sky(
     width: int = settings.SCREEN_WIDTH,
     height: int = settings.SCREEN_HEIGHT,
@@ -158,13 +181,7 @@ def build_sky(
     strip = pygame.Surface((1, bands))
     for index in range(bands):
         fraction = index / max(bands - 1, 1)
-        strip.set_at(
-            (0, index),
-            tuple(
-                round(top + (bottom - top) * fraction)
-                for top, bottom in zip(top_color, bottom_color, strict=True)
-            ),
-        )
+        strip.set_at((0, index), blend_color(top_color, bottom_color, fraction))
     return pygame.transform.scale(strip, (width, height))
 
 
@@ -250,7 +267,7 @@ class CloudField:
         for cloud in self.clouds:
             surface.blit(cloud.image, (round(cloud.x), round(cloud.y)))
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Cloud]:
         return iter(self.clouds)
 
     def __len__(self) -> int:
@@ -507,7 +524,7 @@ class BirdSprite:
 
         # Belly highlight along the bottom of the body.
         belly = pygame.Rect(0, 0, size - 8, size // 2)
-        belly.center = (round(center) + 2, round(center) + radius // 2)
+        belly.center = (round(center) + 2, round(center) + round(radius // 2))
         pygame.draw.ellipse(image, settings.BIRD_BELLY_COLOR, belly)
 
         # Wing, rotated about its shoulder across the wing cycle.
@@ -656,15 +673,13 @@ class Visuals:
         fraction = self.score_pulse / settings.SCORE_PULSE_SECONDS
         if fraction <= 0.0:
             return settings.TEXT_COLOR
-        weight = round(fraction * settings.SCORE_PULSE_STEPS)
-        if weight <= 0:
+        steps = round(fraction * settings.SCORE_PULSE_STEPS)
+        if steps <= 0:
             return settings.TEXT_COLOR
-        weight /= settings.SCORE_PULSE_STEPS
-        return tuple(
-            round(base + (bright - base) * weight)
-            for base, bright in zip(
-                settings.TEXT_COLOR, settings.SCORE_PULSE_COLOR, strict=True
-            )
+        return blend_color(
+            settings.TEXT_COLOR,
+            settings.SCORE_PULSE_COLOR,
+            steps / settings.SCORE_PULSE_STEPS,
         )
 
     # --- Drawing -------------------------------------------------------------
@@ -685,7 +700,7 @@ class Visuals:
     def draw_ground(self, surface: pygame.Surface) -> None:
         self.ground.draw(surface)
 
-    def draw_bird(self, surface: pygame.Surface, player) -> None:
+    def draw_bird(self, surface: pygame.Surface, player: Player) -> None:
         """Draw the player using its position and velocity only."""
         self.bird.draw(surface, player.x, player.y, player.velocity_y)
 

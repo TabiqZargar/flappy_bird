@@ -507,6 +507,29 @@ python -m pytest
 `pyproject.toml` points `testpaths` at `tests/`, so plain `python -m pytest` from
 the repository root is enough — the 531 tests are found without naming a path.
 
+### Quality gates
+
+Three checks, all configured in `pyproject.toml`, and all expected to pass
+before a change lands:
+
+```bash
+python -m ruff check src tests main.py   # lint: errors, imports, bugbear
+python -m ruff format --check .          # formatting (ruff format, Black-compatible)
+python -m mypy src                       # types
+```
+
+`ruff format` is the single formatter for the project — there is no second
+style to reconcile with. The rule set is deliberately narrow (`E`, `F`, `I`,
+`B`): it catches unused imports, undefined names, import order and obvious
+mistakes without burying the code in style noise. Markdown is excluded from
+formatting so the hand-aligned examples above keep their alignment.
+
+mypy runs at a near-strict level, but Pygame ships no type information, so it is
+the one thing configured as untyped. Where a module accepts something injected
+rather than imported — the clock in `utils.frame_delta`, the mixer in
+`AudioManager`, the player in `Visuals.draw_bird` — a small `Protocol` states
+exactly what is needed instead of falling back to `Any` or a blanket ignore.
+
 The tests default to Pygame's headless `dummy` video driver, so they pass
 without a display. They cover the settings and window configuration, the
 player's gravity/jump behaviour, pipe geometry and spawning, every collision
@@ -542,7 +565,11 @@ of writing.
 
 Two fixtures model the two situations: `game` is a round already in progress
 (what the gameplay tests drive), and `idle_game` is a fresh instance still
-waiting in `START`.
+waiting in `START`. Both live in `tests/conftest.py`, along with the helpers
+more than one file needs (`advance`, `add_passed_pipe`, `crash` and the shared
+`DT` frame step) in `tests/helpers.py` — so a fix to the scaffolding lands
+everywhere at once. `test_audio.py` keeps its own `game`/`idle_game`, because
+those swap in a recording stand-in for the audio manager.
 
 ## Project structure
 
@@ -571,6 +598,8 @@ flappy_bird/
 │       └── utils.py             # small helpers (clamp, frame delta, layout)
 └── tests/
     ├── __init__.py              # adds src/ to sys.path, headless SDL
+    ├── conftest.py              # shared fixtures: game, idle_game
+    ├── helpers.py               # shared helpers: DT, advance, add_passed_pipe, crash
     ├── test_game.py
     ├── test_visuals.py
     ├── test_audio.py

@@ -24,58 +24,12 @@ from flappy_bird.difficulty import (
     profile_for_level,
 )
 from flappy_bird.game import Game
-from flappy_bird.pipe import Pipe
 from flappy_bird.pipe_manager import PipeManager
 from flappy_bird.state import GameState
+from tests.helpers import DT, add_passed_pipe, advance, crash
 
-DT = 1 / 60
 PROFILES = all_profiles()
 TOP = settings.DIFFICULTY_MAX_LEVEL
-
-
-@pytest.fixture()
-def game():
-    """A game with a round already under way."""
-    instance = Game(headless=True)
-    instance.start_round()
-    pygame.event.clear()
-    yield instance
-    pygame.quit()
-
-
-@pytest.fixture()
-def idle_game():
-    """A freshly constructed game, still waiting in the START state."""
-    instance = Game(headless=True)
-    pygame.event.clear()
-    yield instance
-    pygame.quit()
-
-
-def advance(game: Game, seconds: float, dt: float = DT) -> None:
-    """Step the game, flapping just enough to keep the bird in the air."""
-    for _ in range(round(seconds / dt)):
-        if game.player.y > settings.BIRD_START_Y:
-            game.flap()
-        game.update(dt)
-
-
-def add_passed_pipe(game: Game) -> Pipe:
-    """Put a pipe behind the bird, so the next update scores it."""
-    pipe = Pipe(x=0, gap_y=settings.BIRD_START_Y)
-    game.pipe_manager.pipes.append(pipe)
-    return pipe
-
-
-def crash(game: Game) -> None:
-    """Force a collision on the next update."""
-    game.pipe_manager.pipes.append(
-        Pipe(
-            x=settings.BIRD_START_X - 10,
-            gap_y=settings.BIRD_START_Y - settings.PIPE_GAP_SIZE,
-        )
-    )
-    game.update(DT)
 
 
 # --- Configuration ----------------------------------------------------------
@@ -530,7 +484,7 @@ class TestGameDifficulty:
     def test_existing_pipes_keep_their_geometry_as_difficulty_rises(self, game):
         early = game.pipe_manager.spawn()
         before = (early.gap, early.speed, early.gap_y)
-        for score in range(1, TOP * settings.DIFFICULTY_SCORE_STEP + 1):
+        for _ in range(1, TOP * settings.DIFFICULTY_SCORE_STEP + 1):
             game.add_score(1)
             game.sync_difficulty()
             game.update(DT)

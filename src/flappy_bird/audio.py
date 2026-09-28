@@ -20,11 +20,37 @@ from __future__ import annotations
 import array
 import math
 import random
+from typing import Protocol
 
 import pygame
 
 from . import settings
 from .utils import clamp
+
+
+class _Sound(Protocol):
+    """The part of ``pygame.mixer.Sound`` this module actually uses."""
+
+    def set_volume(self, volume: float) -> None: ...
+
+    def play(self) -> object: ...
+
+    def stop(self) -> None: ...
+
+
+class _Mixer(Protocol):
+    """The part of ``pygame.mixer`` this module actually uses.
+
+    Stated as a protocol so the fake and refusing devices the tests inject
+    keep working, without pretending to be the real module.
+    """
+
+    def get_init(self) -> tuple[int, int, int] | None: ...
+
+    def init(self) -> object: ...
+
+    def Sound(self, buffer: bytes) -> _Sound: ...  # noqa: N802
+
 
 #: Sample format the synthesiser understands; anything else stays silent.
 _PCM_FORMAT = -16
@@ -263,7 +289,7 @@ class AudioManager:
         self,
         volume: float = settings.MASTER_VOLUME,
         muted: bool = False,
-        mixer=None,
+        mixer: _Mixer | None = None,
         enabled: bool = True,
     ) -> None:
         # The mixer is injectable for the same reason PipeManager takes an rng:
@@ -271,7 +297,7 @@ class AudioManager:
         self._mixer = mixer if mixer is not None else pygame.mixer
         self._volume = clamp(float(volume), 0.0, 1.0)
         self._muted = bool(muted)
-        self._sounds: dict[str, object] = {}
+        self._sounds: dict[str, _Sound] = {}
         self._init_error: str | None = None
         self.available = False
         if enabled:
@@ -293,7 +319,7 @@ class AudioManager:
             self._sounds = {}
             self.available = False
 
-    def _build_sounds(self) -> dict[str, object]:
+    def _build_sounds(self) -> dict[str, _Sound]:
         """Create one ``Sound`` per effect, sized for the real mixer format."""
         fmt = self._mixer.get_init()
         if fmt is None:
@@ -304,7 +330,7 @@ class AudioManager:
             # else simply plays nothing rather than playing noise.
             return {}
 
-        sounds: dict[str, object] = {}
+        sounds: dict[str, _Sound] = {}
         for name, buffer in render_buffers(rate, channels).items():
             sound = self._mixer.Sound(buffer=buffer)
             sound.set_volume(self._volume)
