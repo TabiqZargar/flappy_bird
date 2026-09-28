@@ -2,34 +2,70 @@
 
 A minimal, modular [Pygame](https://www.pygame.org/) Flappy Bird.
 
-Current status: the window, main loop, input handling, the bird's physics
-(float position, gravity, flap, ceiling/ground detection), procedurally spawned
-pipes (randomized gaps, timed spawning, off-screen recycling), bird/pipe
-collision detection, scoring (one point per passed pipe plus a session high
-score), a progressive difficulty ladder driven by that score, and an explicit
-start/play/game-over state machine are implemented. The look is layered on top: a
-cached sky gradient, drifting parallax clouds, a scrolling textured ground, a
-tilted animated bird and capped, lit pipes, all drawn with plain Pygame shapes
-and the built-in font — no external image, font or audio assets. Four short
-arcade sound effects are synthesised from scratch at start-up, and `M` mutes
-them. Sounds are intentionally the only audio feature for now; there is no music.
+## Overview
 
-The game starts exactly as the classic did and tightens very gently as you score:
-a little faster, a little tighter, a little more often, up to a bounded maximum.
+One round of Flappy Bird in a window: flap the bird through the gaps, one point
+per pipe, and the run gets gently harder the more you score. Everything is
+generated in code — there is not a single image, font or audio file in the
+repository.
+
+The game starts exactly as the classic did and tightens very gently as you
+score: a little faster, a little tighter, a little more often, up to a bounded
+maximum.
+
+## Features
+
+- **Delta-time physics** — gravity, flap and terminal velocity integrated in
+  seconds, so the game feels identical at any frame rate.
+- **Explicit state machine** — `START` / `PLAYING` / `GAME_OVER`; only a live
+  round simulates, so the other two are frozen worlds by construction.
+- **Procedurally drawn world** — cached sky gradient, parallax clouds, scrolling
+  textured ground, a tilted animated bird and capped, lit pipes, all from plain
+  Pygame shapes and the built-in font.
+- **Synthesised sound** — four short arcade effects generated into 16-bit PCM at
+  start-up, with volume clamping and an `M` mute toggle. No music.
+- **Progressive difficulty** — a six-level ladder driven by the score, bounded so
+  no score ever makes the game harder again.
+- **Score-based difficulty that only affects future pipes** — a pipe keeps the
+  speed and gap it was born with, so nothing in flight changes underneath you.
+- **Defensive audio** — a broken or missing sound device can never end a run.
+- **Fully headless-testable** — the whole suite runs without a display or a sound
+  device, and `Game(headless=True)` skips the mixer entirely.
+- **Typed and packaged** — annotated sources, a PEP 561 `py.typed` marker, Ruff,
+  mypy and a src layout that installs cleanly.
 
 ## Requirements
 
 - Python 3.11 or newer
+- Pygame, installed automatically with the package
 
-## Install
+## Installation
 
-Create a virtual environment:
+From the repository root:
+
+```bash
+python -m pip install -e .
+```
+
+That is the only command needed to play. It installs the one runtime dependency
+(Pygame) and puts the `flappy_bird` package — which lives in `src/` — on the
+import path, so no `PYTHONPATH` juggling is required afterwards.
+
+To also install the development tools (pytest, Ruff, mypy) needed for the
+[quality checks](#development-quality-checks):
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+`pyproject.toml` is the single source of truth for dependencies.
+`requirements.txt` only defers to it (`-e .[dev]`), so the two cannot disagree.
+
+A virtual environment is optional but recommended:
 
 ```bash
 python -m venv .venv
 ```
-
-Activate it:
 
 ```bash
 # macOS / Linux
@@ -39,24 +75,7 @@ source .venv/bin/activate
 .venv\Scripts\Activate.ps1
 ```
 
-Then install the game itself, in editable mode, together with its runtime
-dependency and development tools:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-That step is what puts the `flappy_bird` package (which lives in `src/`) on the
-import path, so no `PYTHONPATH` juggling is needed afterwards. The only runtime
-dependency is Pygame; `pyproject.toml` is the single source of truth for it.
-
-To install just the game, without the development tools:
-
-```bash
-python -m pip install -e .
-```
-
-## Run the game
+## Running the game
 
 ```bash
 python main.py
@@ -66,18 +85,21 @@ Two equivalent shortcuts, both using the same launcher:
 
 ```bash
 python -m flappy_bird   # module entry point
-flappy-bird            # console script (after the Scripts/bin dir is on PATH)
+flappy-bird            # console script, needs its scripts dir on PATH
 ```
 
-### Controls
+`python -m flappy_bird` is the one to reach for if the console script is not on
+your `PATH`; the module form works wherever the package is importable.
 
-| Key                | Action                                    |
-| ------------------ | ----------------------------------------- |
-| `Space`/`Up`/`W`   | Start, flap, or restart                   |
-| Left mouse click   | Start, flap, or restart                   |
-| `M`                | Toggle mute                               |
-| `R`                | Restart                                   |
-| `Esc`              | Quit                                      |
+## Controls
+
+| Key              | Action                                  |
+| ---------------- | --------------------------------------- |
+| `Space`/`Up`/`W` | Start, flap, or restart                 |
+| Left mouse click | Start, flap, or restart                 |
+| `M`              | Toggle mute                             |
+| `R`              | Restart                                 |
+| `Esc`            | Quit                                    |
 
 Right and middle mouse buttons are ignored in every state.
 
@@ -312,7 +334,7 @@ device.
 The only format assumption is 16-bit signed PCM. If the mixer opens on anything
 else, the manager stays silent rather than playing noise.
 
-## Difficulty
+## Progressive difficulty
 
 The game gets harder as you score, gently and by a fixed amount. One level per
 five points, six levels, and level 0 *is* the original game:
@@ -498,52 +520,29 @@ brand-new `Game` starts both counters from zero again.
 The score is drawn with the built-in Pygame font at the top centre as
 `Score: N`; the game-over panel repeats it next to the `Best: N` line.
 
-## Run the tests
+## Running the tests
 
 ```bash
-python -m pytest
+python -m pytest -q
 ```
 
-`pyproject.toml` points `testpaths` at `tests/`, so plain `python -m pytest` from
-the repository root is enough — the 531 tests are found without naming a path.
+`pyproject.toml` points `testpaths` at `tests/`, so this works from the
+repository root with no path argument and no install step — the 531 tests are
+found either way. `pytest -q` is the same thing if you prefer the console
+script.
 
-### Quality gates
-
-Three checks, all configured in `pyproject.toml`, and all expected to pass
-before a change lands:
-
-```bash
-python -m ruff check src tests main.py   # lint: errors, imports, bugbear
-python -m ruff format --check .          # formatting (ruff format, Black-compatible)
-python -m mypy src                       # types
-```
-
-`ruff format` is the single formatter for the project — there is no second
-style to reconcile with. The rule set is deliberately narrow (`E`, `F`, `I`,
-`B`): it catches unused imports, undefined names, import order and obvious
-mistakes without burying the code in style noise. Markdown is excluded from
-formatting so the hand-aligned examples above keep their alignment.
-
-mypy runs at a near-strict level, but Pygame ships no type information, so it is
-the one thing configured as untyped. Where a module accepts something injected
-rather than imported — the clock in `utils.frame_delta`, the mixer in
-`AudioManager`, the player in `Visuals.draw_bird` — a small `Protocol` states
-exactly what is needed instead of falling back to `Any` or a blanket ignore.
-
-The tests default to Pygame's headless `dummy` video driver, so they pass
-without a display. They cover the settings and window configuration, the
-player's gravity/jump behaviour, pipe geometry and spawning, every collision
-edge case, the scoring rule (including exactly-once and the crash frame), the
-high-score lifecycle across restarts, and the state machine: the three states
-and their transitions, that a frozen state really is frozen, per-key and
-per-button input in every state, and each screen rendering the right text.
+`test_game.py` holds 232 tests over the settings and window configuration, the
+player's gravity/jump behaviour, pipe geometry and spawning, every collision edge
+case, the scoring rule (including exactly-once and the crash frame), the
+high-score lifecycle across restarts, and the state machine: the three states and
+their transitions, that a frozen state really is frozen, per-key and per-button
+input in every state, and each screen rendering the right text.
 
 `test_visuals.py` adds 85 tests over the presentation layer: the sky gradient,
-cloud layout and wrapping, the ground band and its fixed collision line, the
-tilt curve and its clamps, wing animation from `dt`, the sprite caches, the
-panels and the score text, pipe shading, and — importantly — that rendering and
-updating the visuals never move the player, the pipes, the score or
-`Player.rect`.
+cloud layout and wrapping, the ground band and its fixed collision line, the tilt
+curve and its clamps, wing animation from `dt`, the sprite caches, the panels
+and the score text, pipe shading, and — importantly — that rendering and updating
+the visuals never move the player, the pipes, the score or `Player.rect`.
 
 `test_audio.py` adds 101 tests over the sound effects and their wiring: the
 shape of each generated buffer (length, no clipping, fades at both ends, the
@@ -571,14 +570,74 @@ more than one file needs (`advance`, `add_passed_pipe`, `crash` and the shared
 everywhere at once. `test_audio.py` keeps its own `game`/`idle_game`, because
 those swap in a recording stand-in for the audio manager.
 
-## Project structure
+## Development quality checks
+
+Three checks, all configured in `pyproject.toml`, and all expected to pass
+before a change lands:
+
+```bash
+ruff check src tests main.py   # lint
+ruff format --check .          # formatting
+mypy src                       # types
+```
+
+Those are the console scripts `pip install -e ".[dev]"` puts on your `PATH`. If
+you would rather not depend on `PATH` — or you hit "command not found" because
+the interpreter's scripts directory is missing from it — the exact equivalents
+are:
+
+```bash
+python -m ruff check src tests main.py
+python -m ruff format --check .
+python -m mypy src
+```
+
+`ruff format` is the single formatter for the project — there is no second style
+to reconcile with. The lint rule set is deliberately narrow (`E`, `F`, `I`, `B`):
+it catches unused imports, undefined names, import order and obvious mistakes
+without burying the code in style noise. Markdown is excluded from formatting so
+the hand-aligned examples above keep their alignment.
+
+mypy runs at a near-strict level, but Pygame ships no type information, so it is
+the one thing configured as untyped. Where a module accepts something injected
+rather than imported — the clock in `utils.frame_delta`, the mixer in
+`AudioManager`, the player in `Visuals.draw_bird` — a small `Protocol` states
+exactly what is needed instead of falling back to `Any` or a blanket ignore.
+
+## Headless testing
+
+The suite needs neither a display nor a sound device.
+
+`tests/__init__.py` sets SDL to the `dummy` video and audio drivers before
+anything else is imported, so `python -m pytest` works over SSH, in CI and in a
+container with no graphics stack installed.
+
+`Game(headless=True)` does the same thing for code under test: it defaults the
+two SDL variables, forces the dummy drivers and builds the `AudioManager` with
+`enabled=False`, so no device is opened at all. That is what the `game` and
+`idle_game` fixtures use.
+
+```python
+from flappy_bird import Game
+
+game = Game(headless=True)   # no window, no mixer
+```
+
+Audio is tested with a fake mixer and a recording stand-in for the game's own
+manager, so the real device is never required. See
+[Headless and no-audio fallback](#headless-and-no-audio-fallback) for what
+happens when a real mixer is unavailable.
+
+## Architecture and project structure
 
 ```
 flappy_bird/
 ├── main.py                      # entry point: builds and runs the Game
 ├── pyproject.toml               # packaging, metadata and tooling config
+├── MANIFEST.in                  # what the source distribution includes
 ├── requirements.txt             # thin pointer to the project's own deps
 ├── README.md
+├── .gitignore
 ├── src/
 │   └── flappy_bird/
 │       ├── __init__.py          # public API re-exports
@@ -606,9 +665,56 @@ flappy_bird/
     └── test_difficulty.py
 ```
 
+Generated directories — `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
+`.mypy_cache/`, `build/`, `dist/`, `*.egg-info/` and `.venv/` — are not part of
+the project and are covered by `.gitignore`.
+
 The package is a standard [src layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/):
 the importable code lives in `src/`, never at the repository root, so there is
 exactly one copy of it on the import path whether it was installed or not.
+
+## Configuration and customization
+
+Every tunable value in the game is a module-level constant in
+`src/flappy_bird/settings.py`. There is no config file and no settings screen:
+you change a number, restart, and that is the whole mechanism. Constants are
+grouped by what they affect. (The only environment variables the package reads
+are `SDL_VIDEODRIVER` and `SDL_AUDIODRIVER`, and only in the `headless=True`
+path described in [Headless testing](#headless-testing).)
+
+| Group                                   | Examples                                                     |
+| --------------------------------------- | ------------------------------------------------------------ |
+| Window and loop                         | `SCREEN_WIDTH`, `SCREEN_HEIGHT`, `FPS`, `CAPTION`            |
+| Bird physics and geometry               | `GRAVITY`, `JUMP_VELOCITY`, `MAX_FALL_SPEED`, `BIRD_SIZE`    |
+| Boundaries                              | `CEILING_Y`, `GROUND_HEIGHT`, `GROUND_TOP` (derived)         |
+| Pipes                                   | `PIPE_SPEED`, `PIPE_GAP_SIZE`, `PIPE_WIDTH`, spawn interval  |
+| Difficulty ladder                       | `DIFFICULTY_SCORE_STEP`, `DIFFICULTY_MAX_LEVEL`, the clamps  |
+| Colours                                 | `BIRD_*_COLOR`, `PIPE_*_COLOR`, `SKY_*_COLOR`, `CLOUD_*`     |
+| Text and layout                         | `SCORE_FONT_SIZE`, `TITLE_FONT_SIZE`, `*_TEXT_Y`             |
+| Audio                                   | `MASTER_VOLUME`, `AUDIO_FREQUENCY`, per-effect gains and pitch |
+| Sprite animation                        | `BIRD_TILT_*`, `BIRD_WING_*`, `BIRD_SPRITE_MARGIN`          |
+| World motion                            | `CLOUD_*`, `GROUND_SCROLL_SPEED`, `CLOUD_SURPLUS_X`          |
+
+A few things worth knowing before editing:
+
+- **`GROUND_TOP` is derived** (`SCREEN_HEIGHT - GROUND_HEIGHT`). Change
+  `SCREEN_HEIGHT` and the ground follows; editing `GROUND_TOP` directly is
+  overwritten on the next line.
+- **Difficulty clamps must be reachable.** The ladder is built once at import
+  from `PIPE_SPEED`, `PIPE_GAP_SIZE` and `PIPE_SPAWN_INTERVAL`, so level 0 always
+  equals those three constants. If a `DIFFICULTY_*` clamp is set so the last
+  level is never actually reached, the cap is simply never hit — the progression
+  stays monotonic, but the documented maximum is wrong. `tests/test_difficulty.py`
+  asserts the clamp boundaries, so it will tell you.
+- **Colours are plain `(r, g, b)` tuples**, accepted anywhere a Pygame colour is.
+- **Audio is synthesised from these numbers.** `AUDIO_FREQUENCY`, `AUDIO_SIZE`
+  and `AUDIO_CHANNELS` describe the format the mixer is asked for; if it hands
+  back anything other than 16-bit PCM the game plays on in silence rather than
+  noise.
+
+`PipeManager` also takes optional overrides for tests and experiments — `speed`,
+`gap`, `spawn_interval` and the gap-center range. Passing any of them pins that
+manager to fixed values instead of following the difficulty ladder.
 
 ## Design notes
 

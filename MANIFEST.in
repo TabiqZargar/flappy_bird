@@ -1,0 +1,14 @@
+# What goes into the source distribution.
+#
+# setuptools includes every `test*.py` it can find by default, which would ship
+# the test suite to end users. The distribution carries the game and its
+# metadata; the tests stay in the repository.
+
+include README.md
+include requirements.txt
+
+prune tests
+prune build
+prune dist
+
+global-exclude __pycache__ *.py[cod] .DS_Store
