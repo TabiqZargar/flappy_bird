@@ -51,8 +51,9 @@ That is the only command needed to play. It installs the one runtime dependency
 (Pygame) and puts the `flappy_bird` package — which lives in `src/` — on the
 import path, so no `PYTHONPATH` juggling is required afterwards.
 
-To also install the development tools (pytest, Ruff, mypy) needed for the
-[quality checks](#development-quality-checks):
+To also install the development tools (pytest, Ruff, mypy and `build`) needed
+for the [quality checks](#development-quality-checks) and
+[packaging](#building-a-distribution):
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -627,6 +628,35 @@ Audio is tested with a fake mixer and a recording stand-in for the game's own
 manager, so the real device is never required. See
 [Headless and no-audio fallback](#headless-and-no-audio-fallback) for what
 happens when a real mixer is unavailable.
+
+## Building a distribution
+
+`build` ships in the `dev` extra, so after the install above:
+
+```bash
+python -m build
+```
+
+That produces both artifacts in `dist/`:
+
+| File                                 | What it is                                            |
+| ------------------------------------ | ----------------------------------------------------- |
+| `flappy_bird-0.1.0-py3-none-any.whl` | the installable wheel                                 |
+| `flappy_bird-0.1.0.tar.gz`            | the source distribution                                |
+
+`python -m build` reads nothing from the environment, so it builds in isolation
+and the wheel is produced *from* the sdist — the closest thing to what a user
+will actually install. Both are named from the version in
+`flappy_bird.__init__.py`, so they cannot drift from what the package reports.
+
+The wheel holds the `flappy_bird` package, `py.typed` and `.dist-info`, and
+nothing else. The sdist holds the sources, `README.md`, `pyproject.toml`,
+`requirements.txt` and `MANIFEST.in`; `MANIFEST.in` keeps the test suite out of
+it, because setuptools would otherwise pick up every `test_*.py` by default.
+Both are pure `py3-none-any`: no compiled code, so one wheel serves every
+platform and interpreter.
+
+`build/` and `dist/` are generated, and are gitignored along with the caches.
 
 ## Architecture and project structure
 

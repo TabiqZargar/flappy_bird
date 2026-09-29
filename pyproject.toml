@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["pygame>=2.5.0,<3.0.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4.0", "ruff>=0.6.0", "mypy>=1.10"]
+dev = ["pytest>=7.4.0", "ruff>=0.6.0", "mypy>=1.10", "build>=1.2.0"]
 
 [project.scripts]
 flappy-bird = "flappy_bird.__main__:main"
