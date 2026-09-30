@@ -407,12 +407,92 @@ def tilt_for_velocity(velocity_y: float) -> float:
     )
 
 
-class BirdSprite:
-    """Procedural bird drawn once per pose and then blitted.
+# --- The bird, as pixel art -------------------------------------------------
+#
+# The sprite is written out as text, one character per authored pixel, so the
+# artwork is readable and editable in the source. `.` is transparent; every other
+# character is looked up in `BIRD_PALETTE`. Lines are asserted to be exactly
+# BIRD_LOGICAL_SIZE wide at import, so a mistyped row fails loudly instead of
+# quietly shifting the sprite.
 
-    The body, wing, eye and beak are painted into a square canvas; the canvas is
-    rotated for the tilt and cached under ``(tilt step, wing frame)``. Only the
-    bounded set of combinations the game can reach is ever built.
+#: Highlight and shadow, derived from the body colour so the palette stays
+#: closed: a shaded pixel is always a blend of two colours already in use.
+BIRD_HIGHLIGHT_COLOR = blend_color(settings.BIRD_COLOR, (255, 255, 255), 0.35)
+BIRD_SHADOW_COLOR = blend_color(settings.BIRD_COLOR, settings.BIRD_OUTLINE_COLOR, 0.55)
+
+BIRD_PALETTE: dict[str, tuple[int, int, int]] = {
+    "O": settings.BIRD_OUTLINE_COLOR,
+    "H": BIRD_HIGHLIGHT_COLOR,
+    "B": settings.BIRD_COLOR,
+    "E": settings.BIRD_BELLY_COLOR,
+    "S": BIRD_SHADOW_COLOR,
+    "k": settings.BIRD_BEAK_COLOR,
+    "d": settings.BIRD_BEAK_DARK_COLOR,
+    "w": settings.BIRD_EYE_COLOR,
+    "p": settings.BIRD_EYE_PUPIL_COLOR,
+    "W": settings.BIRD_WING_COLOR,
+    "X": settings.BIRD_WING_EDGE_COLOR,
+}
+
+#: The bird, 17 x 17, facing right: tail, body, belly, eye, beak.
+BIRD_BODY_PIXELS: tuple[str, ...] = (
+    ".................",
+    "......OOOOO......",
+    "....OOHHHHHOO....",
+    "...OHHHHHBBBBB...",
+    "...OHHHBBBBBBS...",
+    "OOOOHHBBBBBBBS...",
+    "OOOHBwpBBBBBBBSkk",
+    "OOOBBwwBBBBBBBSkk",
+    "SSSBBBBBBBBBBBSdd",
+    "SSSBBBBBBBBBBBSdd",
+    "SSSBBBBBBBBBBBSdd",
+    "SS.OBEEEEEEESS...",
+    "...OBBEEEEEBBS...",
+    "...OBBEEEEBBSS...",
+    "....OOSSSSOO.....",
+    "......OOOO.......",
+    ".................",
+)
+#: Four wing poses, 6 x 3, the root pinned at the left and the tip beating.
+BIRD_WING_PIXELS: tuple[tuple[str, ...], ...] = (
+    ("OWWWWW", "OWWXWW", "OXXWXW"),
+    ("OWWXWW", "OWWWWW", "OXXXWW"),
+    ("OXXWXW", "OWWXWW", "OWWWWW"),
+    ("OXXWXX", "OXXXWW", "OWWXWW"),
+)
+
+
+def _check_pixel_rows(rows: tuple[str, ...], width: int, name: str) -> None:
+    """Fail at import if a drawn row is not exactly ``width`` pixels wide."""
+    for index, line in enumerate(rows):
+        if len(line) != width:
+            raise ValueError(
+                f"{name} row {index} is {len(line)} pixels wide, expected {width}"
+            )
+        unknown = set(line) - set(BIRD_PALETTE) - {"."}
+        if unknown:
+            raise ValueError(f"{name} row {index} has unknown pixels {sorted(unknown)}")
+
+
+_check_pixel_rows(BIRD_BODY_PIXELS, settings.BIRD_LOGICAL_SIZE, "bird body")
+for _pose_index, _pose in enumerate(BIRD_WING_PIXELS):
+    _check_pixel_rows(_pose, len(BIRD_WING_PIXELS[0][0]), f"bird wing {_pose_index}")
+del _pose_index, _pose
+
+
+class BirdSprite:
+    """A hand-drawn pixel bird, built once per pose and then blitted.
+
+    The artwork is authored on a 17-pixel logical grid, the wing is stamped on
+    top for the current wing frame, and the whole thing is rotated for the tilt
+    and scaled up by an integer factor with ``pygame.transform.scale``. Scaling
+    is nearest neighbour, so the result is the same artwork with every pixel
+    turned into a hard square block -- no smoothing and no anti-aliasing.
+
+    Poses are cached under ``(tilt step, wing frame)``, so only the bounded set
+    of combinations the game can reach is ever built, and nothing is rebuilt
+    per frame.
     """
 
     def __init__(
@@ -426,6 +506,7 @@ class BirdSprite:
         self.wing_frames = max(wing_frames, 1)
         self.wing_phase = 0.0
         self._frames: dict[tuple[int, int], pygame.Surface] = {}
+        self._logical: dict[int, pygame.Surface] = {}
 
     # --- Animation -----------------------------------------------------------
 
@@ -488,123 +569,65 @@ class BirdSprite:
             ),
         )
 
+    @property
+    def logical_size(self) -> int:
+        """Side length of the pre-scale canvas, in authored pixels."""
+        return settings.BIRD_LOGICAL_SIZE + settings.BIRD_PIXEL_MARGIN * 2
+
+    def logical_frame(self, wing_index: int) -> pygame.Surface:
+        """The unrotated, unscaled pixel grid for one wing pose.
+
+        Exposed so the scale factor and the palette can be checked without
+        guessing at the final surface. Cached, like the poses themselves.
+        """
+        frame = self._logical.get(wing_index)
+        if frame is None:
+            frame = self._build_logical(wing_index)
+            self._logical[wing_index] = frame
+        return frame
+
     def _build(self, tilt_index: int, wing_index: int) -> pygame.Surface:
-        flat = self._build_flat(wing_index)
-        return pygame.transform.rotate(flat, self.cached_angles()[tilt_index])
+        """Rotate the pixel grid for the tilt, then scale it up by whole pixels."""
+        rotated = pygame.transform.rotate(
+            self.logical_frame(wing_index), self.cached_angles()[tilt_index]
+        )
+        # `scale` is nearest neighbour; `smoothscale` would blend the palette
+        # into new colours and undo the pixel art.
+        return pygame.transform.scale(
+            rotated,
+            (
+                rotated.get_width() * settings.BIRD_PIXEL_SCALE,
+                rotated.get_height() * settings.BIRD_PIXEL_SCALE,
+            ),
+        )
 
-    def _build_flat(self, wing_index: int) -> pygame.Surface:
-        """Paint the unrotated bird for one wing pose."""
-        size = self.size
-        margin = settings.BIRD_SPRITE_MARGIN
-        side = size + margin * 2
+    def _build_logical(self, wing_index: int) -> pygame.Surface:
+        """Paint the authored pixels, plus the wing, onto the logical canvas."""
+        side = self.logical_size
+        margin = settings.BIRD_PIXEL_MARGIN
         image = pygame.Surface((side, side), pygame.SRCALPHA)
-        center = side / 2
-        radius = size / 2 - 2
 
-        # Tail feathers, drawn behind the body.
-        tail = [
-            (center - radius + 1, center - radius * 0.45),
-            (center - radius - margin + 2, center - radius * 0.85),
-            (center - radius - margin + 2, center + radius * 0.10),
-            (center - radius + 1, center + radius * 0.30),
-        ]
-        pygame.draw.polygon(image, settings.BIRD_OUTLINE_COLOR, tail)
-        pygame.draw.polygon(
-            image,
-            settings.BIRD_BEAK_DARK_COLOR,
-            [(x + 1, y) for x, y in tail],
-            1,
-        )
+        rows = BIRD_BODY_PIXELS
+        for y, line in enumerate(rows):
+            for x, char in enumerate(line):
+                color = BIRD_PALETTE.get(char)
+                if color is not None:
+                    image.set_at((x + margin, y + margin), color)
 
-        # Body.
-        body = pygame.Rect(0, 0, size, size)
-        body.center = (round(center), round(center))
-        pygame.draw.ellipse(image, settings.BIRD_OUTLINE_COLOR, body.inflate(4, 4))
-        pygame.draw.ellipse(image, settings.BIRD_COLOR, body)
-
-        # Belly highlight along the bottom of the body.
-        belly = pygame.Rect(0, 0, size - 8, size // 2)
-        belly.center = (round(center) + 2, round(center) + round(radius // 2))
-        pygame.draw.ellipse(image, settings.BIRD_BELLY_COLOR, belly)
-
-        # Wing, rotated about its shoulder across the wing cycle.
-        self._draw_wing(image, center, radius, wing_index)
-
-        # Beak, pointing right.
-        beak_x = center + radius - 1
-        beak = [
-            (beak_x, center - 5),
-            (beak_x + margin + 1, center + 1),
-            (beak_x, center + 6),
-        ]
-        pygame.draw.polygon(image, settings.BIRD_OUTLINE_COLOR, beak)
-        pygame.draw.polygon(
-            image,
-            settings.BIRD_BEAK_COLOR,
-            [(x, y) for x, y in beak],
-        )
-        pygame.draw.line(
-            image,
-            settings.BIRD_BEAK_DARK_COLOR,
-            beak[0],
-            (beak_x, center + 6),
-            1,
-        )
-
-        # Eye: white with a pupil, plus a small brow.
-        eye_center = (round(center + radius * 0.42), round(center - radius * 0.42))
-        pygame.draw.circle(image, settings.BIRD_EYE_COLOR, eye_center, 6)
-        pygame.draw.circle(
-            image,
-            settings.BIRD_OUTLINE_COLOR,
-            eye_center,
-            6,
-            1,
-        )
-        pygame.draw.circle(
-            image,
-            settings.BIRD_EYE_PUPIL_COLOR,
-            (eye_center[0] + 2, eye_center[1]),
-            2,
-        )
+        # The wing is stamped over the body, so it animates without disturbing
+        # the silhouette, the eye or the beak.
+        wing = BIRD_WING_PIXELS[wing_index % len(BIRD_WING_PIXELS)]
+        origin_x, origin_y = settings.BIRD_WING_ORIGIN
+        for y, line in enumerate(wing):
+            for x, char in enumerate(line):
+                color = BIRD_PALETTE.get(char)
+                if color is not None:
+                    image.set_at((x + origin_x + margin, y + origin_y + margin), color)
         return image
-
-    def _draw_wing(
-        self, image: pygame.Surface, center: float, radius: float, wing_index: int
-    ) -> None:
-        """Blit one wing pose, rotating it about the shoulder."""
-        span = settings.BIRD_WING_SWING_DEGREES
-        fraction = wing_index / max(self.wing_frames - 1, 1)
-        angle = settings.BIRD_WING_REST_DEGREES + span * fraction
-
-        wing_width = max(round(radius * 1.1), 4)
-        wing_height = max(round(radius * 0.78), 3)
-        wing = pygame.Surface((wing_width, wing_height), pygame.SRCALPHA)
-        pygame.draw.ellipse(wing, settings.BIRD_OUTLINE_COLOR, wing.get_rect())
-        pygame.draw.ellipse(
-            wing,
-            settings.BIRD_WING_COLOR,
-            wing.get_rect().inflate(-2, -2),
-        )
-        for stripe in range(1, 3):
-            y = round(wing_height * stripe / 3)
-            pygame.draw.line(
-                wing,
-                settings.BIRD_WING_EDGE_COLOR,
-                (2, y),
-                (wing_width - 2, y),
-                1,
-            )
-        wing = pygame.transform.rotate(wing, angle)
-
-        shoulder = (round(center - radius * 0.15), round(center + radius * 0.05))
-        image.blit(
-            wing,
-            (shoulder[0] - wing.get_width() // 2, shoulder[1] - wing.get_height() // 2),
-        )
 
     def clear(self) -> None:
         self._frames.clear()
+        self._logical.clear()
 
     def __len__(self) -> int:
         return len(self._frames)

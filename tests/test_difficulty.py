@@ -59,10 +59,11 @@ class TestDifficultySettings:
         assert settings.DIFFICULTY_MIN_GAP > settings.BIRD_SIZE
 
     def test_the_baseline_pipe_constants_are_untouched(self):
-        # Level 0 has to be exactly the game that shipped in phase 7.
+        # Level 0 has to be exactly the baseline the difficulty ladder derives
+        # from: 120 px/s, a 160 px gap, and a pipe every 2.0s.
         assert settings.PIPE_SPEED == 120
         assert settings.PIPE_GAP_SIZE == 160
-        assert settings.PIPE_SPAWN_INTERVAL == 1.6
+        assert settings.PIPE_SPAWN_INTERVAL == 2.0
 
 
 # --- The pure ladder --------------------------------------------------------
@@ -200,7 +201,7 @@ class TestProfilesAreBounded:
             PROFILES[0].pipe_gap = 1  # type: ignore[misc]
 
     def test_profiles_compare_by_value(self):
-        assert DifficultyProfile(0, 120.0, 160, 1.6) == BASELINE
+        assert DifficultyProfile(0, 120.0, 160, 2.0) == BASELINE
 
 
 class TestProgressionIsMonotonic:

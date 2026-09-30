@@ -13,7 +13,7 @@ The progression is deliberately gentle. Speed rises by
 ``DIFFICULTY_SPEED_INCREMENT`` per level, the gap shrinks by
 ``DIFFICULTY_GAP_DECREMENT``, and pipes arrive a little sooner, but the last
 level is still comfortably playable: a 33% faster scroll, a gap three times the
-bird, and 192 px of space between pipe pairs. The clamps are not decoration --
+bird, and 240 px of space between pipe pairs. The clamps are not decoration --
 they are what stop a very long run from turning the game into a wall.
 """
 

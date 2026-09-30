@@ -27,8 +27,8 @@ BIRD_EYE_PUPIL_COLOR = (38, 30, 18)
 
 # --- Physics ----------------------------------------------------------------
 
-GRAVITY = 1400.0
-JUMP_VELOCITY = -520.0
+GRAVITY = 1250.0
+JUMP_VELOCITY = -370.0
 MAX_FALL_SPEED = 750.0
 MAX_FRAME_TIME = 1.0 / 15.0
 GROUND_HEIGHT = 20
@@ -45,7 +45,7 @@ PIPE_GAP_SIZE = 160
 PIPE_MIN_GAP_CENTER = 160
 PIPE_MAX_GAP_CENTER = 540
 PIPE_SPEED = 120.0
-PIPE_SPAWN_INTERVAL = 1.6
+PIPE_SPAWN_INTERVAL = 2.0
 PIPE_COLOR = (34, 177, 76)
 PIPE_EDGE_COLOR = (20, 105, 45)
 PIPE_CAP_COLOR = (28, 152, 64)
@@ -79,7 +79,8 @@ DIFFICULTY_MIN_GAP = 120
 #: Seconds removed from PIPE_SPAWN_INTERVAL on each level (-0.4s at level 5).
 DIFFICULTY_SPAWN_DECREMENT = 0.08
 #: Hard floor on the spawn interval, so pipes can never arrive faster than this.
-DIFFICULTY_MIN_SPAWN_INTERVAL = 1.2
+#: Reached exactly at level 5, like the speed ceiling and the gap floor.
+DIFFICULTY_MIN_SPAWN_INTERVAL = 1.6
 
 # --- Presentation -----------------------------------------------------------
 
@@ -121,9 +122,27 @@ BIRD_TILT_MAX_DEGREES = 25.0  # nose up, the highest climb
 BIRD_TILT_STEPS = 10
 BIRD_WING_FRAMES = 4
 BIRD_WING_FRAMES_PER_SECOND = 9.0
-BIRD_WING_REST_DEGREES = -34.0
-BIRD_WING_SWING_DEGREES = 66.0
-BIRD_SPRITE_MARGIN = 10
+
+# --- Bird sprite: pixel art -------------------------------------------------
+#
+# The bird is authored by hand on a small logical grid of BIRD_LOGICAL_SIZE
+# pixels a side -- one character per pixel, see ``visuals`` -- and then scaled up
+# by BIRD_PIXEL_SCALE with ``pygame.transform.scale``, which is nearest
+# neighbour. Every visible pixel is therefore a hard BIRD_PIXEL_SCALE-square
+# block: no smoothing, no anti-aliasing, no sub-pixel colours.
+#
+# BIRD_LOGICAL_SIZE * BIRD_PIXEL_SCALE == BIRD_SIZE, so the artwork is exactly
+# as wide as the collision box. The scale is deliberately an integer; a
+# fractional one would resample the grid and undo the whole point.
+
+#: Pixels across the authored sprite, before scaling.
+BIRD_LOGICAL_SIZE = 17
+#: Real pixels per authored pixel. Integer, and an exact divisor of BIRD_SIZE.
+BIRD_PIXEL_SCALE = 2
+#: Logical pixels of empty canvas around the art, so a tilted pose still fits.
+BIRD_PIXEL_MARGIN = 3
+#: Where the authored wing grid is blitted, as (col, row) on the logical grid.
+BIRD_WING_ORIGIN = (3, 8)
 
 # --- Audio -------------------------------------------------------------------
 

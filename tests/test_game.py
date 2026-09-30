@@ -7,6 +7,7 @@ import pytest
 
 from flappy_bird import settings
 from flappy_bird.collision import check_any_pipe_collision, check_pipe_collision
+from flappy_bird.difficulty import all_profiles
 from flappy_bird.game import Game
 from flappy_bird.pipe import Pipe
 from flappy_bird.pipe_manager import PipeManager
@@ -159,6 +160,139 @@ class TestPlayerPhysics:
         player = Player()
         assert player.rect.size == (settings.BIRD_SIZE, settings.BIRD_SIZE)
         assert player.rect.center == player.position
+
+
+class TestJumpArc:
+    """A flap has to be a real, repeatable move, not a twitch or a soar.
+
+    These pin the shape of the arc the rebalanced constants produce: the bird
+    rises a readable amount, comes back down where it started, and the climb is
+    small enough to aim with inside the gap.
+    """
+
+    @staticmethod
+    def _arc(dt: float = 1 / 240) -> tuple[list[float], list[float]]:
+        """Simulate one flap, returning (heights, velocities) after the jump."""
+        player = Player()
+        start = player.y
+        player.jump()
+        heights: list[float] = []
+        velocities: list[float] = []
+        while player.y <= start:
+            heights.append(player.y - start)
+            velocities.append(player.velocity_y)
+            player.update(dt)
+            if len(heights) > 10_000:  # pragma: no cover - guards a wrong sign
+                raise AssertionError("the bird never came back down")
+        return heights, velocities
+
+    @classmethod
+    def _rise(cls, dt: float) -> float:
+        """How high one flap actually gets, in pixels."""
+        return -min(cls._arc(dt)[0])
+
+    @classmethod
+    def _flight_time(cls, dt: float) -> float:
+        """How long one flap takes to come back down, in seconds."""
+        return len(cls._arc(dt)[0]) * dt
+
+    def test_a_flap_actually_lifts_the_bird(self):
+        heights, _ = self._arc()
+        assert min(heights) < -settings.BIRD_SIZE
+
+    def test_the_rise_matches_the_configured_impulse(self):
+        expected = settings.JUMP_VELOCITY**2 / (2 * settings.GRAVITY)
+        # A sampled apex can only fall short of the continuous one, by less
+        # than a pixel at this step size.
+        assert self._rise(1 / 240) == pytest.approx(expected, abs=1.0)
+
+    def test_the_bird_returns_to_where_it_took_off(self):
+        _, velocities = self._arc()
+        # The arc is symmetric about its apex, so the return leg matches the
+        # climb: same peak speed, mirrored in time.
+        assert velocities[0] == settings.JUMP_VELOCITY
+        assert abs(velocities[-1]) < abs(velocities[0])
+
+    def test_the_arc_is_the_same_every_time(self):
+        first, _ = self._arc()
+        second, _ = self._arc()
+        assert first == second
+
+    def test_the_arc_converges_as_the_step_shrinks(self):
+        # Sampling the apex can only lose height, and loses less at a smaller
+        # step, so the physics converges instead of being frame-locked.
+        rises = [self._rise(dt) for dt in (1 / 30, 1 / 60, 1 / 120, 1 / 240)]
+        analytic = settings.JUMP_VELOCITY**2 / (2 * settings.GRAVITY)
+        # A sampled apex can only fall short of the continuous one, and falls
+        # short by less at a smaller step: it converges, never overshoots.
+        assert all(rise <= analytic for rise in rises)
+        assert rises == sorted(rises)
+        assert rises[0] < rises[-1]
+
+    def test_the_trip_up_and_back_is_the_same_at_any_frame_rate(self):
+        # Up then straight back down: twice the time to stop climbing.
+        expected = 2 * abs(settings.JUMP_VELOCITY) / settings.GRAVITY
+        flights = [self._flight_time(dt) for dt in (1 / 30, 1 / 60, 1 / 120, 1 / 240)]
+        assert max(flights) - min(flights) <= 1 / 30
+        for flight in flights:
+            assert flight == pytest.approx(expected, abs=1 / 30)
+
+    def test_the_rise_leaves_room_to_aim_inside_the_gap(self):
+        rise = settings.JUMP_VELOCITY**2 / (2 * settings.GRAVITY)
+        # Half the gap is the room the bird's centre has on each side, and the
+        # bird itself must still fit either side of that.
+        headroom = settings.PIPE_GAP_SIZE / 2 - settings.BIRD_SIZE / 2
+        assert rise <= headroom
+
+    def test_a_flap_recovers_from_terminal_velocity(self):
+        # The dive clamp must not swallow a flap: tapping near the limit still
+        # lifts the bird.
+        player = Player()
+        player.velocity_y = settings.MAX_FALL_SPEED
+        player.jump()
+        assert player.velocity_y == settings.JUMP_VELOCITY
+
+    def test_gravity_still_pulls_down_between_flaps(self):
+        player = Player()
+        player.jump()
+        player.update(DT)
+        assert player.velocity_y > settings.JUMP_VELOCITY
+
+
+class TestPipeSpacing:
+    """Pipes must arrive slowly enough to be aimed at, at every level."""
+
+    def test_the_baseline_spacing_is_wider_than_the_gap(self):
+        spacing = settings.PIPE_SPAWN_INTERVAL * settings.PIPE_SPEED
+        assert spacing > settings.PIPE_GAP_SIZE
+        # Wider than the gap by enough that the bird can be between pipes.
+        assert spacing >= settings.PIPE_GAP_SIZE + settings.BIRD_SIZE
+
+    def test_every_difficulty_level_keeps_a_reachable_spacing(self):
+        for profile in all_profiles():
+            spacing = profile.spawn_interval * profile.pipe_speed
+            assert spacing > profile.pipe_gap, profile.level
+            assert spacing >= profile.pipe_gap + settings.BIRD_SIZE, profile.level
+
+    def test_spacing_never_shrinks_as_the_game_gets_harder(self):
+        spacings = [
+            profile.spawn_interval * profile.pipe_speed for profile in all_profiles()
+        ]
+        assert spacings == sorted(spacings)
+
+    def test_the_last_level_still_leaves_time_to_react(self):
+        hardest = all_profiles()[-1]
+        # The window in which the player can move between two pipes.
+        assert hardest.spawn_interval >= 1.0
+        assert hardest.pipe_gap > settings.BIRD_SIZE
+
+    def test_the_bird_crosses_the_spacing_in_a_reasonable_time(self):
+        # Time to travel one spacing at the top speed, comfortably more than the
+        # one second needed to react to a gap.
+        time_to_cross = (
+            settings.PIPE_SPAWN_INTERVAL * settings.PIPE_SPEED
+        ) / settings.DIFFICULTY_MAX_SPEED
+        assert time_to_cross > 0.5
 
 
 class TestPlayerBoundaries:
@@ -363,14 +497,15 @@ class TestPipeManager:
 
     def test_no_spawn_before_interval_elapses(self):
         manager = PipeManager()
-        manager.update(1.0)
+        half = settings.PIPE_SPAWN_INTERVAL / 2
+        manager.update(half)
         assert manager.pipes == []
-        assert manager.next_spawn_in == pytest.approx(0.6)
+        assert manager.next_spawn_in == pytest.approx(half)
 
     def test_spawns_after_interval(self):
         manager = PipeManager()
-        manager.update(1.0)
-        manager.update(0.7)
+        manager.update(settings.PIPE_SPAWN_INTERVAL)
+        manager.update(0.1)
         assert len(manager.pipes) == 1
         assert manager.elapsed == pytest.approx(0.1)
 
@@ -427,9 +562,12 @@ class TestPipeManager:
     def test_spawning_is_frame_rate_independent(self):
         coarse = PipeManager()
         fine = PipeManager()
-        for _ in range(120):
+        # Two whole intervals plus a margin, so the last spawn cannot land on a
+        # rounding boundary of either step size.
+        span = 2 * settings.PIPE_SPAWN_INTERVAL + 0.5
+        for _ in range(round(span * 30)):
             coarse.update(1 / 30)
-        for _ in range(480):
+        for _ in range(round(span * 120)):
             fine.update(1 / 120)
         assert len(coarse.pipes) == len(fine.pipes) == 2
         # Spawns land on a frame boundary, so positions may differ by the
@@ -478,12 +616,12 @@ class TestPipeManager:
 
 class TestGamePipes:
     def test_game_spawns_pipes_over_time(self, game):
-        advance(game, 2.0)
+        advance(game, settings.PIPE_SPAWN_INTERVAL + 0.4)
         assert len(game.pipes) >= 1
         assert all(isinstance(pipe, Pipe) for pipe in game.pipes)
 
     def test_game_pipes_move_left(self, game):
-        advance(game, 1.8)
+        advance(game, settings.PIPE_SPAWN_INTERVAL + 0.2)
         first = game.pipes[0]
         start_x = first.x
         advance(game, 0.2)
@@ -497,7 +635,7 @@ class TestGamePipes:
             assert bottom.bottom <= settings.GROUND_TOP
 
     def test_restart_clears_pipes_and_timer(self, game):
-        advance(game, 2.0)
+        advance(game, settings.PIPE_SPAWN_INTERVAL + 0.4)
         assert game.pipes
         game.restart()
         assert game.pipes == []
@@ -508,7 +646,7 @@ class TestGamePipes:
         )
 
     def test_rendering_with_pipes_does_not_raise(self, game):
-        advance(game, 2.5, render=True)
+        advance(game, settings.PIPE_SPAWN_INTERVAL + 0.5, render=True)
         assert game.pipes
 
 

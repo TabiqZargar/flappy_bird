@@ -111,8 +111,8 @@ identical at any frame rate. The tunables live in `src/flappy_bird/settings.py`:
 
 | Constant            | Value     | Meaning                                    |
 | ------------------- | --------- | ------------------------------------------ |
-| `GRAVITY`           | `1400.0`  | Downward acceleration in px/s²             |
-| `JUMP_VELOCITY`     | `-520.0`  | Upward velocity (px/s) set on each flap    |
+| `GRAVITY`           | `1250.0`  | Downward acceleration in px/s²             |
+| `JUMP_VELOCITY`     | `-370.0`  | Upward velocity (px/s) set on each flap    |
 | `MAX_FALL_SPEED`    | `750.0`   | Terminal downward velocity in px/s         |
 | `BIRD_SIZE`         | `34`      | Bird hitbox size in px                     |
 | `CEILING_Y`         | `0`       | Top of the playable area                   |
@@ -217,20 +217,32 @@ freezes completely behind its panel, and the gameplay rules stay untouched.
 
 ### The bird
 
-`BirdSprite` draws the bird out of ellipses and polygons — body, belly, wing
-with two feather stripes, eye with pupil, beak and tail — and gives it two
-independent motions:
+`BirdSprite` is pixel art, not a smooth drawing. The bird is written out in
+`visuals.py` as text, one character per authored pixel — a 17×17 body with
+belly, eye, pupil, beak, tail, highlight and shadow, plus four 6×3 wing poses —
+and each character maps to a colour in `BIRD_PALETTE`. The grid is painted onto a
+small logical canvas with a 3-pixel margin, rotated for the tilt, and then scaled
+up by `BIRD_PIXEL_SCALE` with `pygame.transform.scale`. Scaling is nearest
+neighbour, so every authored pixel becomes a hard 2×2 square: no smoothing, no
+anti-aliasing, and not a single colour outside the palette. `smoothscale` would
+blend the palette into new colours, which is exactly what the pixel art must
+never do. `BIRD_LOGICAL_SIZE * BIRD_PIXEL_SCALE == BIRD_SIZE`, so the artwork is
+as wide as the collision box.
+
+On top of that it has two independent motions:
 
 - **Tilt** from vertical velocity: rising lifts the nose, falling drops it,
   clamped to `BIRD_TILT_MIN_DEGREES`/`BIRD_TILT_MAX_DEGREES`, and quantised into
   `BIRD_TILT_STEPS` buckets so a smooth curve does not rebuild a surface on
   every micro-change of velocity.
 - **Wing** from an accumulated `wing_phase` driven by `dt`, cycling through
-  `BIRD_WING_FRAMES` raised/lowered positions at `BIRD_WING_FPS`.
+  `BIRD_WING_FRAMES` poses at `BIRD_WING_FRAMES_PER_SECOND`. The wing is stamped
+  over the body below the eye, so the bird keeps its face in every frame.
 
 Each `(tilt, wing)` pair is rendered once into a surface and cached, so at most
 `BIRD_TILT_STEPS * BIRD_WING_FRAMES` bird surfaces exist, no matter how long the
-game runs. The canvas carries a small margin so a rotated bird is never clipped.
+game runs. The margin is there so a rotated bird is never clipped, and it
+costs nothing: the extra canvas is transparent.
 
 **Rotation is visual only.** `Player.rect` is still the same axis-aligned
 `BIRD_SIZE` square that collision uses, so the hitbox is bit-for-bit the hitbox
@@ -345,17 +357,17 @@ level = min(max(score, 0) // DIFFICULTY_SCORE_STEP, DIFFICULTY_MAX_LEVEL)
 
 speed      = min(PIPE_SPEED  + level * 8.0,  160.0)   # 120 -> 160 px/s
 gap        = max(PIPE_GAP_SIZE - level * 8,    120)   # 160 -> 120 px
-interval   = max(PIPE_SPAWN_INTERVAL - level * 0.08, 1.2)   # 1.60 -> 1.20 s
+interval   = max(PIPE_SPAWN_INTERVAL - level * 0.08, 1.6)   # 2.00 -> 1.60 s
 ```
 
 | Level | From score | Speed | Gap | Interval |
 | ----- | ---------- | ----- | --- | -------- |
-| 0     | 0          | 120   | 160 | 1.60 s   |
-| 1     | 5          | 128   | 152 | 1.52 s   |
-| 2     | 10         | 136   | 144 | 1.44 s   |
-| 3     | 15         | 144   | 136 | 1.36 s   |
-| 4     | 20         | 152   | 128 | 1.28 s   |
-| 5     | 25         | 160   | 120 | 1.20 s   |
+| 0     | 0          | 120   | 160 | 2.00 s   |
+| 1     | 5          | 128   | 152 | 1.92 s   |
+| 2     | 10         | 136   | 144 | 1.84 s   |
+| 3     | 15         | 144   | 136 | 1.76 s   |
+| 4     | 20         | 152   | 128 | 1.68 s   |
+| 5     | 25         | 160   | 120 | 1.60 s   |
 
 The progression is **bounded**: level 5 is reached at 25 points and no score ever
 makes the game harder again. The three clamps are the reason, and they are hit
@@ -365,7 +377,7 @@ It is also deliberately **subtle**. A full ladder is a 33% faster scroll and a
 25% tighter gap — the hardest gap is still 3.5x the bird. Most runs end long
 before the cap, so difficulty is something you feel rather than something you
 see. Consecutive pipe pairs never overlap either: the spacing between them stays
-at 192–196 px, comfortably wider than any gap, at every single level.
+at 240–256 px, comfortably wider than any gap, at every single level.
 
 `difficulty.py` is a pure function of the score and nothing else — no clock, no
 RNG, no game state. It only produces numbers; it never moves, spawns or draws
@@ -375,8 +387,8 @@ and `get_difficulty(score)` is a clamp and a tuple index.
 ```python
 from flappy_bird import get_difficulty, all_profiles, BASELINE, MAXIMUM
 
-get_difficulty(0)    # level 0, pipe_speed=120.0, pipe_gap=160, spawn_interval=1.6
-get_difficulty(12)   # level 2, pipe_speed=136.0, pipe_gap=144, spawn_interval=1.44
+get_difficulty(0)    # level 0, pipe_speed=120.0, pipe_gap=160, spawn_interval=2.0
+get_difficulty(12)   # level 2, pipe_speed=136.0, pipe_gap=144, spawn_interval=1.84
 get_difficulty(999)  # level 5, the same object every time, forever
 get_difficulty(-5)   # level 0; a negative score cannot break the index
 ```
@@ -460,13 +472,13 @@ geometry and horizontal movement. Every manager tick:
 | Constant                 | Value  | Meaning                                    |
 | ------------------------ | ------ | ------------------------------------------ |
 | `PIPE_SPEED`             | `120.0`| Horizontal speed in px/s                   |
-| `PIPE_SPAWN_INTERVAL`    | `1.6`  | Seconds between pipes                      |
+| `PIPE_SPAWN_INTERVAL`    | `2.0`  | Seconds between pipes                      |
 | `PIPE_GAP_SIZE`          | `160`  | Height of the passable gap in px           |
 | `PIPE_MIN_GAP_CENTER`    | `160`  | Lowest allowed gap center                  |
 | `PIPE_MAX_GAP_CENTER`    | `540`  | Highest allowed gap center                 |
 | `PIPE_WIDTH`             | `60`   | Width of one pipe column in px             |
 
-`PIPE_SPAWN_INTERVAL * PIPE_SPEED` (192 px) is the distance between consecutive
+`PIPE_SPAWN_INTERVAL * PIPE_SPEED` (240 px) is the distance between consecutive
 pipes, so the gap always stays reachable.
 
 Gap centers come from `utils.random_gap_center`, which narrows the configured
@@ -722,7 +734,7 @@ path described in [Headless testing](#headless-testing).)
 | Colours                                 | `BIRD_*_COLOR`, `PIPE_*_COLOR`, `SKY_*_COLOR`, `CLOUD_*`     |
 | Text and layout                         | `SCORE_FONT_SIZE`, `TITLE_FONT_SIZE`, `*_TEXT_Y`             |
 | Audio                                   | `MASTER_VOLUME`, `AUDIO_FREQUENCY`, per-effect gains and pitch |
-| Sprite animation                        | `BIRD_TILT_*`, `BIRD_WING_*`, `BIRD_SPRITE_MARGIN`          |
+| Sprite animation                        | `BIRD_TILT_*`, `BIRD_WING_*`, `BIRD_PIXEL_*`                 |
 | World motion                            | `CLOUD_*`, `GROUND_SCROLL_SPEED`, `CLOUD_SURPLUS_X`          |
 
 A few things worth knowing before editing:
@@ -782,6 +794,6 @@ manager to fixed values instead of following the difficulty ladder.
 ## Next steps
 
 - Background music, and a settings screen for volume and difficulty.
-- Replace the procedural bird with a sprite sheet, keeping `BirdSprite`'s
-  cached-surface interface so nothing else has to change.
+- Swap the authored pixel grid in `visuals.py` for a hand-drawn sprite sheet,
+  keeping `BirdSprite`'s cached-surface interface so nothing else has to change.
 

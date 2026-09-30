@@ -13,6 +13,11 @@ from flappy_bird import settings
 from flappy_bird.pipe import Pipe
 from flappy_bird.state import GameState
 from flappy_bird.visuals import (
+    BIRD_BODY_PIXELS,
+    BIRD_HIGHLIGHT_COLOR,
+    BIRD_PALETTE,
+    BIRD_SHADOW_COLOR,
+    BIRD_WING_PIXELS,
     BirdSprite,
     PanelCache,
     TextCache,
@@ -358,6 +363,200 @@ class TestBirdSprite:
             settings.BIRD_OUTLINE_COLOR,
         }
         assert surface.get_at((200, 300))[:3] in palette
+
+
+def opaque_colours(sprite: pygame.Surface) -> set[tuple[int, int, int]]:
+    """Every fully opaque colour in a sprite, ignoring the transparent canvas."""
+    return {
+        sprite.get_at((x, y))[:3]
+        for y in range(sprite.get_height())
+        for x in range(sprite.get_width())
+        if sprite.get_at((x, y))[3] == 255
+    }
+
+
+class TestBirdIsPixelArt:
+    """The sprite must read as hard-edged pixels, not as a smooth drawing."""
+
+    def test_the_sprite_is_generated_not_loaded_from_disk(self):
+        # No asset can be missing, misnamed or stale: every pixel comes from
+        # the tables in visuals.py, so the bird is always drawable.
+        assert settings.BIRD_LOGICAL_SIZE == len(BIRD_BODY_PIXELS)
+        assert len(BIRD_WING_PIXELS) == settings.BIRD_WING_FRAMES
+        assert BirdSprite().frame(0.0).get_width() > 0
+
+    def test_every_authored_row_is_exactly_one_logical_pixel_wide(self):
+        for row in BIRD_BODY_PIXELS:
+            assert len(row) == settings.BIRD_LOGICAL_SIZE
+        for pose in BIRD_WING_PIXELS:
+            for row in pose:
+                assert len(row) == len(pose[0])
+
+    def test_the_art_only_uses_pixels_the_palette_defines(self):
+        allowed = set(BIRD_PALETTE) | {"."}
+        for row in BIRD_BODY_PIXELS:
+            assert set(row) <= allowed
+        for pose in BIRD_WING_PIXELS:
+            for row in pose:
+                assert set(row) <= allowed
+
+    def test_the_art_is_as_wide_as_the_collision_box(self):
+        # 17 authored pixels scaled by 2 is exactly BIRD_SIZE, so the drawing
+        # lines up with the hitbox instead of floating inside it.
+        assert settings.BIRD_LOGICAL_SIZE * settings.BIRD_PIXEL_SCALE == (
+            settings.BIRD_SIZE
+        )
+
+    def test_the_scale_is_a_whole_number_of_pixels(self):
+        # A fractional scale would resample the grid and blur it.
+        assert settings.BIRD_PIXEL_SCALE >= 2
+        assert isinstance(settings.BIRD_PIXEL_SCALE, int)
+        assert settings.BIRD_SIZE % settings.BIRD_PIXEL_SCALE == 0
+
+    def test_the_scale_factor_is_an_integer(self):
+        sprite = BirdSprite()
+        sprite.wing_phase = 0.0
+        rotated = sprite.logical_frame(0)
+        for velocity in (-800.0, -400.0, 0.0, 400.0, 800.0):
+            frame = sprite.frame(velocity)
+            angle = sprite.cached_angles()[sprite.tilt_index(velocity)]
+            spun = pygame.transform.rotate(rotated, angle)
+            assert frame.get_size() == (
+                spun.get_width() * settings.BIRD_PIXEL_SCALE,
+                spun.get_height() * settings.BIRD_PIXEL_SCALE,
+            )
+
+    def test_every_pixel_is_a_hard_square_block(self):
+        # The real proof of nearest-neighbour scaling: uniform 2x2 blocks. A
+        # smoothed sprite would blend neighbouring palette colours here.
+        sprite = BirdSprite()
+        sprite.wing_phase = 0.0
+        frame = sprite.frame(0.0)
+        scale = settings.BIRD_PIXEL_SCALE
+        for y in range(0, frame.get_height() - 1, scale):
+            for x in range(0, frame.get_width() - 1, scale):
+                block = {
+                    frame.get_at((x + dx, y + dy))[:3]
+                    for dx in range(scale)
+                    for dy in range(scale)
+                }
+                assert len(block) == 1, f"blended block at {(x, y)}"
+
+    def test_no_pixel_is_antialiased_into_a_new_colour(self):
+        sprite = BirdSprite()
+        expected = {
+            settings.BIRD_COLOR,
+            settings.BIRD_OUTLINE_COLOR,
+            settings.BIRD_BELLY_COLOR,
+            settings.BIRD_WING_COLOR,
+            settings.BIRD_WING_EDGE_COLOR,
+            settings.BIRD_BEAK_COLOR,
+            settings.BIRD_BEAK_DARK_COLOR,
+            settings.BIRD_EYE_COLOR,
+            settings.BIRD_EYE_PUPIL_COLOR,
+            BIRD_HIGHLIGHT_COLOR,
+            BIRD_SHADOW_COLOR,
+        }
+        sprite.wing_phase = 0.0
+        for velocity in (-800.0, -400.0, 0.0, 400.0, 800.0):
+            assert opaque_colours(sprite.frame(velocity)) <= expected
+
+    def test_every_configured_colour_reaches_the_screen(self):
+        sprite = BirdSprite()
+        sprite.wing_phase = 0.0
+        drawn = opaque_colours(sprite.frame(0.0))
+        for colour in (
+            settings.BIRD_COLOR,
+            settings.BIRD_OUTLINE_COLOR,
+            settings.BIRD_BELLY_COLOR,
+            settings.BIRD_WING_COLOR,
+            settings.BIRD_WING_EDGE_COLOR,
+            settings.BIRD_BEAK_COLOR,
+            settings.BIRD_BEAK_DARK_COLOR,
+            settings.BIRD_EYE_COLOR,
+            settings.BIRD_EYE_PUPIL_COLOR,
+        ):
+            assert colour in drawn
+
+    def test_the_body_has_belly_wing_eye_beak_and_tail(self):
+        body = "".join(BIRD_BODY_PIXELS)
+        drawn = {BIRD_PALETTE[char] for char in body if char != "."}
+        for colour in (
+            settings.BIRD_BELLY_COLOR,
+            settings.BIRD_EYE_COLOR,
+            settings.BIRD_EYE_PUPIL_COLOR,
+            settings.BIRD_BEAK_COLOR,
+            settings.BIRD_BEAK_DARK_COLOR,
+            settings.BIRD_OUTLINE_COLOR,
+        ):
+            assert colour in drawn
+        # The pupil is a single authored pixel, and the highlight and shadow are
+        # derived from the body colour, so the bird still reads as lit and shaded.
+        assert body.count("p") == 1
+        assert "H" in body
+        assert "S" in body
+        # The tail is the three leftmost columns of the silhouette.
+        assert BIRD_BODY_PIXELS[5][:3] != "..."
+
+    def test_the_wing_is_stamped_over_the_body_below_the_eye(self):
+        origin_x, origin_y = settings.BIRD_WING_ORIGIN
+        pose = BIRD_WING_PIXELS[0]
+        # The wing must not reach up to the eye row, or the bird would go
+        # blank-faced in some frames.
+        assert origin_y > 7
+        assert origin_y + len(pose) <= settings.BIRD_LOGICAL_SIZE
+        assert origin_x + len(pose[0]) <= settings.BIRD_LOGICAL_SIZE
+
+    def test_the_four_wing_poses_are_visibly_different(self):
+        sprite = BirdSprite()
+        rendered = set()
+        for index in range(settings.BIRD_WING_FRAMES):
+            sprite.wing_phase = (index + 0.5) / settings.BIRD_WING_FRAMES
+            rendered.add(pygame.image.tostring(sprite.frame(0.0), "RGBA"))
+        assert len(rendered) == settings.BIRD_WING_FRAMES
+
+    def test_the_eye_survives_every_wing_pose(self):
+        sprite = BirdSprite()
+        for index in range(settings.BIRD_WING_FRAMES):
+            sprite.wing_phase = (index + 0.5) / settings.BIRD_WING_FRAMES
+            drawn = opaque_colours(sprite.frame(0.0))
+            assert settings.BIRD_EYE_PUPIL_COLOR in drawn
+            assert settings.BIRD_EYE_COLOR in drawn
+
+    def test_the_tilt_only_rotates_the_art_it_never_redraws_it(self):
+        sprite = BirdSprite()
+        sprite.wing_phase = 0.0
+        level = sprite.frame(0.0)
+        dive = sprite.frame(800.0)
+        # Different tilts, so a different orientation on a larger canvas...
+        assert sprite.tilt_index(0.0) != sprite.tilt_index(800.0)
+        assert (dive.get_width(), dive.get_height()) != (
+            level.get_width(),
+            level.get_height(),
+        )
+        # ...but rotation only ever drops pixels, never invents a colour.
+        assert opaque_colours(dive) <= opaque_colours(level)
+
+    def test_the_hitbox_is_still_exactly_the_bird_size(self, game):
+        # Pixel art must not leak into collision: the rect is untouched.
+        game.flap()
+        game.update(DT)
+        assert game.player.rect.size == (settings.BIRD_SIZE, settings.BIRD_SIZE)
+
+    def test_physics_is_untouched_by_rendering(self, game):
+        game.flap()
+        game.update(DT)
+        moved = (game.player.y, game.player.velocity_y)
+        game.render()
+        assert (game.player.y, game.player.velocity_y) == moved
+
+    def test_the_sprite_canvas_is_transparent_around_the_art(self, surface):
+        # The canvas is bigger than the art, so blitting cannot paint an opaque
+        # rectangle over the sky.
+        sprite = BirdSprite()
+        frame = sprite.frame(0.0)
+        assert frame.get_at((0, 0))[3] == 0
+        assert frame.get_at((frame.get_width() - 1, 0))[3] == 0
 
 
 class TestVisualsDoNotTouchGameplay:
