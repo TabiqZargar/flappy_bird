@@ -19,9 +19,10 @@ maximum.
   seconds, so the game feels identical at any frame rate.
 - **Explicit state machine** — `START` / `PLAYING` / `GAME_OVER`; only a live
   round simulates, so the other two are frozen worlds by construction.
-- **Procedurally drawn world** — cached sky gradient, parallax clouds, scrolling
-  textured ground, a tilted animated bird and capped, lit pipes, all from plain
-  Pygame shapes and the built-in font.
+- **Procedurally drawn pixel-art world** — a banded sky, two layers of parallax
+  distant scenery, block-built clouds, a scrolling grass-and-soil ground, capped
+  and lit pipes, and every label rasterised through a hand-authored 5×7 bitmap
+  font. No smoothing anywhere: each authored pixel becomes a hard square.
 - **Synthesised sound** — four short arcade effects generated into 16-bit PCM at
   start-up, with volume clamping and an `M` mute toggle. No music.
 - **Progressive difficulty** — a six-level ladder driven by the score, bounded so
@@ -176,15 +177,21 @@ state, so no single method grows a nest of conditionals:
 
 | Method                  | Draws                                                       |
 | ----------------------- | ----------------------------------------------------------- |
-| `render_world()`        | sky, clouds, pipes, bird, ground (shared by every state)     |
-| `render_start_screen()` | `FLAPPY BIRD` + `Press SPACE or Click to Start`             |
-| `render_playing()`      | the running `Score: N`                                      |
+| `render_world()`        | sky, scenery, clouds, pipes, bird, ground (shared by every state) |
+| `render_start_screen()` | `FLAPPY BIRD`, a large idle bird, `Best: N`, a blinking `Press SPACE or Click to Start`, and the control hints |
+| `render_playing()`      | the running `Score: N` and the difficulty level              |
 | `render_game_over()`    | `GAME OVER`, `Score: N`, `Best: N`, `Press SPACE or Click to Restart` |
 
-The bird and the world stay visible underneath the panels, and every panel is
-sized to its own text and centred, so the prompts never overlap the score.
-Panel surfaces are cached per (title, lines) pair, so the cards are rasterised
-once instead of on every frame.
+The start screen is deliberately **not** a card: the bird and the world sit
+behind real UI, so the title screen is the game rather than a menu drawn on top
+of it. The bird is passed through as a hero sprite (`render_world(show_bird=False)`
+plus `draw_title_bird()`), so the attract screen shows one big flapping bird
+instead of two, and the small one keeps its gameplay position.
+
+The bird and the world stay visible underneath the game-over panel, and every
+panel is sized to its own text and centred, so the prompts never overlap the
+score. Panel surfaces are cached per (title, lines) pair, so the cards are
+rasterised once instead of on every frame.
 
 ## Visuals
 
@@ -199,21 +206,28 @@ early return for non-playing states:
 ```python
 self.visuals.update(
     dt,
-    animate_bird=self.state.is_playing,
-    drift_clouds=self.state is not GameState.GAME_OVER,
+    animate_bird=not frozen,
+    drift_clouds=not frozen,
 )
 ```
 
 That single call decides the whole ambient-motion policy:
 
-| State      | Bird wing/tilt animation | Clouds + ground scroll |
-| ---------- | ------------------------ | ---------------------- |
-| `START`    | frozen                   | drifting               |
-| `PLAYING`  | running                  | drifting               |
-| `GAME_OVER`| frozen                   | frozen                 |
+| State      | Bird wing/tilt + idle bob | Clouds, scenery, ground scroll |
+| ---------- | -------------------------- | ------------------------------ |
+| `START`    | running                   | drifting                       |
+| `PLAYING`  | running                   | drifting                       |
+| `GAME_OVER`| frozen                    | frozen                         |
 
 The attract screen is therefore alive rather than static, the game-over screen
-freezes completely behind its panel, and the gameplay rules stay untouched.
+freezes completely behind its panel, and the gameplay rules stay untouched. The
+wing beat runs on `START` too: there is no velocity to tilt against before the
+round begins, so a flapping wing is the only life the sprite can have there.
+
+Everything the attract screen animates is a pure accumulator driven by `dt` —
+`idle_phase` for the bob, `prompt_visible` for the blink, the layer offsets for
+the scroll. None of it is a wall clock, so the animation is deterministic and
+pausing the loop cannot desynchronise it from the world.
 
 ### The bird
 
@@ -254,30 +268,62 @@ enlarges the transparent canvas around it.
 
 ### World layers
 
-`render_world()` draws back to front: sky, clouds, pipes, bird, ground.
+`render_world()` draws back to front: sky, distant scenery, clouds, pipes, bird,
+ground. The order is the layering contract — anything listed later covers
+anything listed earlier, and every layer is painted only inside its own bounds.
 
-- **Sky** — a `build_sky` vertical gradient, rasterised once and blitted.
-- **Clouds** — `CloudField` holds layered clouds that wrap around the screen as
-  they drift, at different speeds per layer for parallax. It takes an `rng`, so
-  a test can pin the layout.
-- **Ground** — `GroundBand` scrolls a tiled strip of grass plus soil marks. The
-  scroll is pure texture: the collision line stays exactly at `GROUND_TOP`, and
-  the grass edge stays pinned while only the pattern moves.
+- **Sky** — `build_sky` paints `SKY_BAND_COUNT` (12) flat horizontal bands that
+  step from `SKY_TOP_COLOR` to `SKY_BOTTOM_COLOR`. The bands are deliberately
+  hard-edged rather than a smooth gradient: a smooth ramp invents hundreds of
+  in-between colours, which breaks the palette and reads as anti-aliasing. The
+  surface is rasterised once and blitted. The exact top and bottom colours are
+  pinned, so the horizon still reads as a gradient.
+- **Distant scenery** — `SceneryField` stacks two `SceneryLayer`s (far, near)
+  generated from `DISTANT_PROFILES`, a compact column-height description. Each
+  layer bakes a seamless tile once and scrolls it at its own speed, so the hills
+  and blocks behind the clouds move at different rates. Both end flush with
+  `GROUND_TOP`, so the parallax lands on the horizon rather than floating.
+- **Clouds** — `CloudField` holds clouds built from `CLOUD_PROFILE`, a column of
+  heights expanded into whole blocks of `CLOUD_BLOCK_PER_SCALE` pixels. Blocks
+  are whole and a whole number of pixels wide, so a cloud is a staircase of
+  squares — never a soft blob, never a half-pixel edge. Clouds wrap around the
+  screen as they drift, and the field takes an `rng`, so a test can pin the
+  layout and get the same frame every time.
+- **Ground** — `GroundBand` scrolls a tiled strip: a dark grass lip, a flat grass
+  band, blades and pebbles in the soil below it. The scroll is pure texture: the
+  collision line stays exactly at `GROUND_TOP`, and the flat grass row is
+  guaranteed single-coloured so the ground never looks striped.
 - **Pipes** — `Pipe.draw()` adds a cap at the end facing the gap, a vertical
   highlight, a shadow and an outline, all drawn *inside* `top_rect` and
   `bottom_rect`. A pipe can therefore never look larger than it collides, and
   the gap always reads as a gap.
 
+### Text
+
+`pixelfont.py` holds a hand-authored 5×7 bitmap font — the letters, digits and
+punctuation the game actually uses, written out as strings where `#` is ink.
+Rendering paints each `#` as a `scale`-sized rectangle, so a label is hard-edged
+at every zoom level and cannot drift off the palette the way an antialiased
+system font does.
+
+It sits behind the same interface as the smooth Pygame renderer
+(`render`/`measure`, via a small `Labeler` `Protocol`), so `TextCache` and
+`PanelCache` do not care which back-end they are handed. That is what lets a
+test pass a bare `pygame.font.Font` while the game draws its own pixel text.
+
 ### Caching
 
 Nothing expensive is rebuilt per frame:
 
-| Cache          | Key                        | Bounded by                    |
-| -------------- | -------------------------- | ----------------------------- |
-| `Visuals.sky`  | built once                 | 1 surface                     |
-| `BirdSprite`   | `(tilt_index, wing_index)` | `TILT_STEPS * WING_FRAMES`    |
-| `TextCache`    | text + font                | one per distinct label        |
-| `PanelCache`   | title + lines              | `MAX_PANELS` (24), LRU-ish    |
+| Cache            | Key                                  | Bounded by                    |
+| ---------------- | ------------------------------------ | ----------------------------- |
+| `Visuals.sky`    | built once                           | 1 surface                     |
+| `BirdSprite`     | `(tilt_index, wing_index)`           | `TILT_STEPS * WING_FRAMES`    |
+| `SceneryLayer`   | built once per layer                 | 1 tile each                   |
+| `GroundBand`     | built once                           | 1 tile                        |
+| `PixelFont`      | text + scale + colours               | `max_entries` (256), LRU-ish  |
+| `TextCache`      | text + font                          | one per distinct label        |
+| `PanelCache`     | title + lines + fonts + colour       | `MAX_PANELS` (24), LRU-ish    |
 
 ## Audio
 
@@ -530,8 +576,9 @@ is the only mutator, and it raises the high score with `max()`. A restart clears
 `score` but **keeps** `high_score`, so the best survives a crash; starting a
 brand-new `Game` starts both counters from zero again.
 
-The score is drawn with the built-in Pygame font at the top centre as
-`Score: N`; the game-over panel repeats it next to the `Best: N` line.
+The score is drawn with the bitmap pixel font at the top centre as `Score: N`,
+with a `Difficulty N` line beneath it; the game-over panel repeats the score
+next to the `Best: N` line, and the title screen shows the best too.
 
 ## Running the tests
 
@@ -540,40 +587,41 @@ python -m pytest -q
 ```
 
 `pyproject.toml` points `testpaths` at `tests/`, so this works from the
-repository root with no path argument and no install step — the 531 tests are
+repository root with no path argument and no install step — the 671 tests are
 found either way. `pytest -q` is the same thing if you prefer the console
 script.
 
-`test_game.py` holds 232 tests over the settings and window configuration, the
-player's gravity/jump behaviour, pipe geometry and spawning, every collision edge
-case, the scoring rule (including exactly-once and the crash frame), the
-high-score lifecycle across restarts, and the state machine: the three states and
-their transitions, that a frozen state really is frozen, per-key and per-button
-input in every state, and each screen rendering the right text.
+| Module              | Tests | Covers                                                                                                                                  |
+| ------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_game.py`      | 275   | settings and window configuration, physics, pipe geometry and spawning, collision edge cases, scoring, high scores, the state machine, input in every state, and each screen |
+| `test_visuals.py`   | 151   | banded sky, block clouds, parallax scenery, ground artwork, the tilt curve, wing and idle animation, every cache, panel and pipe shading      |
+| `test_audio.py`     | 101   | the shape of each generated buffer, safe init against working/refusing/disabled mixers, volume clamping and mute                           |
+| `test_difficulty.py`| 113   | level boundaries, the clamps, monotonicity, and that a point never reshapes the pipe that paid it                                        |
+| `test_pixelfont.py` | 31    | glyph geometry, hard-block scaling, shadows, measurement and the bounded cache                                                          |
 
-`test_visuals.py` adds 85 tests over the presentation layer: the sky gradient,
-cloud layout and wrapping, the ground band and its fixed collision line, the tilt
-curve and its clamps, wing animation from `dt`, the sprite caches, the panels
-and the score text, pipe shading, and — importantly — that rendering and updating
-the visuals never move the player, the pipes, the score or `Player.rect`.
+Several things in there are worth calling out, because they are the tests that
+would actually catch a regression:
 
-`test_audio.py` adds 101 tests over the sound effects and their wiring: the
-shape of each generated buffer (length, no clipping, fades at both ends, the
-right direction of pitch), safe initialisation against a working mixer, a
-refusing mixer and a disabled manager, volume clamping, mute, and the fact that
-no gameplay module imports `audio` or mentions `pygame.mixer`. The game's own
-sound wiring is checked with a recording stand-in, so **no test needs a sound
-device**.
+- **The world cannot touch the simulation.** The visuals suite asserts that
+  advancing and rendering `Visuals` never moves the player, the pipes, the score
+  or `Player.rect`, and the game suite repeats it for a real `Game` — including
+  600 frames of attract screen, where the decoration must be provably moving
+  (`len(set(offsets)) > 1`) while the simulation is provably still.
+- **The palette is closed.** A live playing frame is sampled pixel by pixel and
+  every colour on it must be one the code declares, so no blend, no
+  antialiased edge and no rogue colour can reach the screen unnoticed.
+- **Layer order is a contract.** Each layer is drawn inside its own bounds, the
+  ground covers the foot of a pipe, and the horizon joins flush — so nothing can
+  quietly paint over something it is supposed to sit behind.
+- **Determinism is tested, not assumed.** The same seed and the same `dt` give
+  the same frame; different seeds and different step counts give different
+  frames; and rendering twice never changes the scene. `CloudField` randomises
+  once, at construction, and then never consults the rng again.
+- **Unseeded randomness cannot be mistaken for determinism.** The unseeded case
+  has its own test, which asserts the layout is random *per scene* but fixed for
+  the life of that scene.
 
-`test_difficulty.py` adds 113 tests over the ladder and its plumbing: the level
-boundaries, negative and huge scores, the clamps, monotonicity of all three
-parameters, and the fairness invariant that consecutive pairs never overlap. The
-integration half drives a live game to prove that a point never reshapes the pipe
-that paid it, that pipes in flight keep their birth geometry, that new pipes pick
-up the current profile, and that restart, `START` and `GAME_OVER` all behave.
-Several of them read the modules' *syntax trees* rather than their text, so the
-isolation guarantees cannot be defeated by a comment. `531 passed` at the time
-of writing.
+`671 passed` at the time of writing.
 
 Two fixtures model the two situations: `game` is a round already in progress
 (what the gameplay tests drive), and `idle_game` is a fresh instance still
@@ -686,9 +734,10 @@ flappy_bird/
 │       ├── __main__.py          # `python -m flappy_bird` / the flappy-bird script
 │       ├── py.typed             # PEP 561 marker: the package ships its types
 │       ├── game.py              # Game: window, main loop, input, update, render
-│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio, difficulty)
+│       ├── settings.py          # all tunables (size, FPS, gravity, pipes, colors, audio, difficulty, pixel art)
 │       ├── audio.py             # AudioManager: generated effects, volume, mute
-│       ├── visuals.py           # Visuals: sky, clouds, ground, bird sprite, caches
+│       ├── visuals.py           # Visuals: sky, scenery, clouds, ground, bird sprite, caches
+│       ├── pixelfont.py         # PixelFont: the hand-authored 5x7 bitmap font
 │       ├── difficulty.py        # DifficultyProfile: score -> pipe speed / gap / spawn interval
 │       ├── player.py            # Player: position, velocity, flap, draw
 │       ├── pipe.py              # Pipe: gap geometry, horizontal movement, draw
@@ -703,6 +752,7 @@ flappy_bird/
     ├── helpers.py               # shared helpers: DT, advance, add_passed_pipe, crash
     ├── test_game.py
     ├── test_visuals.py
+    ├── test_pixelfont.py
     ├── test_audio.py
     └── test_difficulty.py
 ```
@@ -733,9 +783,16 @@ path described in [Headless testing](#headless-testing).)
 | Difficulty ladder                       | `DIFFICULTY_SCORE_STEP`, `DIFFICULTY_MAX_LEVEL`, the clamps  |
 | Colours                                 | `BIRD_*_COLOR`, `PIPE_*_COLOR`, `SKY_*_COLOR`, `CLOUD_*`     |
 | Text and layout                         | `SCORE_FONT_SIZE`, `TITLE_FONT_SIZE`, `*_TEXT_Y`             |
+| Pixel-art scale                         | `PIXEL_SCALE` (= `BIRD_PIXEL_SCALE`)                        |
+| Sky                                     | `SKY_BAND_COUNT`, `SKY_TOP_COLOR`, `SKY_BOTTOM_COLOR`       |
+| Clouds                                  | `CLOUD_BASE_WIDTH`, `CLOUD_BASE_HEIGHT`, `CLOUD_BLOCK_PER_SCALE`, `CLOUD_SPEED` |
+| Distant scenery                         | `DISTANT_HEIGHTS`, `DISTANT_COLORS`, `DISTANT_SPEEDS`        |
+| Title screen                            | `TITLE_TEXT_Y`, `TITLE_BIRD_SCALE`, `TITLE_BEST_Y`, `IDLE_BOB_STEP_SECONDS`, `PROMPT_VISIBLE_FRACTION` |
+| Panels                                  | `PANEL_*_COLOR`, `PANEL_BORDER_WIDTH`, `PANEL_SHADOW_OFFSET`, `MAX_PANELS` |
+| Ground                                  | `GROUND_COLOR`, `GROUND_SOIL_COLOR`, `GROUND_GRASS_HEIGHT`, `GROUND_BLADE_COLUMNS` |
 | Audio                                   | `MASTER_VOLUME`, `AUDIO_FREQUENCY`, per-effect gains and pitch |
 | Sprite animation                        | `BIRD_TILT_*`, `BIRD_WING_*`, `BIRD_PIXEL_*`                 |
-| World motion                            | `CLOUD_*`, `GROUND_SCROLL_SPEED`, `CLOUD_SURPLUS_X`          |
+| World motion                            | `GROUND_SCROLL_SPEED`, `CLOUD_SURPLUS_X`                     |
 
 A few things worth knowing before editing:
 
@@ -748,6 +805,13 @@ A few things worth knowing before editing:
   level is never actually reached, the cap is simply never hit — the progression
   stays monotonic, but the documented maximum is wrong. `tests/test_difficulty.py`
   asserts the clamp boundaries, so it will tell you.
+- **`PIXEL_SCALE` is the master pixel size.** `BIRD_PIXEL_SCALE` aliases it, and
+  every label scale is a multiple of it, so the whole screen stays on one pixel
+  grid. Raising it scales the bird, the UI and the authored artwork together.
+- **Cloud and scenery sizes are authored, not scaled.** `CLOUD_BASE_WIDTH` and
+  `CLOUD_BASE_HEIGHT` must stay large enough for `CLOUD_PROFILE` and
+  `CLOUD_SHADE_HEIGHT`, and the tallest `DISTANT_HEIGHTS` entry must fit between
+  `GROUND_TOP` and the top of the screen; both are asserted at import.
 - **Colours are plain `(r, g, b)` tuples**, accepted anywhere a Pygame colour is.
 - **Audio is synthesised from these numbers.** `AUDIO_FREQUENCY`, `AUDIO_SIZE`
   and `AUDIO_CHANNELS` describe the format the mixer is asked for; if it hands
@@ -776,6 +840,8 @@ manager to fixed values instead of following the difficulty ladder.
 - `visuals.py` owns the look, and is the only module that both reads the state
   and holds caches. Because it cannot reach the player or the pipes, art changes
   are structurally incapable of altering the physics or the hitboxes.
+- `pixelfont.py` owns the letterforms, and nothing else does. It is pure data
+  plus a paint loop, so the font can grow without touching the game that uses it.
 - `audio.py` owns the sound, and is deliberately the most defensive module in
   the package: every entry point swallows mixer errors, because a broken sound
   device is not a reason to stop playing.

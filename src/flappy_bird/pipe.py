@@ -87,8 +87,10 @@ class Pipe:
     def draw(self, surface: pygame.Surface) -> None:
         """Draw both halves as capped, lit columns.
 
-        Every piece is drawn *inside* its collision rectangle, so the polished
-        version can never make the hitbox look wrong or play differently.
+        Every piece is drawn *inside* its collision rectangle, so the hitbox can
+        never look wrong or play differently. That includes the cap, which is
+        kept flush with the shaft rather than made to overhang: a wider cap would
+        read as a bigger target than the one the bird actually has to clear.
         """
         top_rect, bottom_rect = self.rects
         if top_rect.width > 0 and top_rect.height > 0:
@@ -99,11 +101,12 @@ class Pipe:
     def _draw_column(
         self, surface: pygame.Surface, rect: pygame.Rect, cap_at_bottom: bool
     ) -> None:
-        """One vertical half: shaft, cap, highlight, shadow and outline.
+        """One vertical half: shaft, cap, highlight, shadow and edges.
 
         ``cap_at_bottom`` says which end of the column faces the gap, so the cap
         is always drawn next to the opening the bird has to fly through.
         """
+        block = settings.PIXEL_SCALE
         pygame.draw.rect(surface, self.color, rect)
 
         cap_height = min(settings.PIPE_CAP_HEIGHT, rect.height)
@@ -116,28 +119,57 @@ class Pipe:
                 inner_edge = cap_rect.top
             else:
                 cap_rect = pygame.Rect(rect.x, rect.y, rect.width, cap_height)
-                inner_edge = cap_rect.bottom - 1
+                inner_edge = cap_rect.bottom - block
             pygame.draw.rect(surface, settings.PIPE_CAP_COLOR, cap_rect)
-            pygame.draw.line(
+            self._shade(surface, cap_rect)
+            # A hard line on the gap-facing side, so the opening reads as an edge
+            # rather than a change of colour.
+            pygame.draw.rect(
                 surface,
                 settings.PIPE_EDGE_COLOR,
-                (rect.left, inner_edge),
-                (rect.right, inner_edge),
-                2,
+                pygame.Rect(rect.x, inner_edge, rect.width, block),
             )
 
-        # A vertical highlight and shadow give the shaft some roundness.
-        highlight = pygame.Rect(
-            rect.x + settings.PIPE_SHADOW_WIDTH,
-            rect.y,
-            settings.PIPE_HIGHLIGHT_WIDTH,
-            rect.height,
-        )
-        pygame.draw.rect(surface, settings.PIPE_HIGHLIGHT_COLOR, highlight)
-        shadow = pygame.Rect(
-            rect.right - settings.PIPE_SHADOW_WIDTH - 1, rect.y, 3, rect.height
-        )
-        pygame.draw.rect(surface, settings.PIPE_SHADOW_COLOR, shadow)
+        self._shade(surface, rect)
 
-        # Outline last, so it stays crisp over the shading.
-        pygame.draw.rect(surface, settings.PIPE_EDGE_COLOR, rect, 3)
+    def _shade(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
+        """Highlight, shadow and hard edges, all inside ``rect``.
+
+        The widths are clamped so a narrow or degenerate rectangle cannot make a
+        strip wrap around or spill outside the collision box.
+        """
+        block = settings.PIXEL_SCALE
+        usable = rect.width - block * 2
+
+        highlight_width = min(settings.PIPE_HIGHLIGHT_WIDTH, usable)
+        if highlight_width > 0:
+            pygame.draw.rect(
+                surface,
+                settings.PIPE_HIGHLIGHT_COLOR,
+                pygame.Rect(rect.x + block, rect.y, highlight_width, rect.height),
+            )
+
+        shadow_width = min(settings.PIPE_SHADOW_WIDTH, usable)
+        if shadow_width > 0:
+            pygame.draw.rect(
+                surface,
+                settings.PIPE_SHADOW_COLOR,
+                pygame.Rect(
+                    rect.right - block - shadow_width,
+                    rect.y,
+                    shadow_width,
+                    rect.height,
+                ),
+            )
+
+        # Edges last, so they stay crisp over the shading.
+        pygame.draw.rect(
+            surface,
+            settings.PIPE_EDGE_COLOR,
+            pygame.Rect(rect.x, rect.y, block, rect.height),
+        )
+        pygame.draw.rect(
+            surface,
+            settings.PIPE_EDGE_COLOR,
+            pygame.Rect(rect.right - block, rect.y, block, rect.height),
+        )

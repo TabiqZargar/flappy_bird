@@ -1601,12 +1601,21 @@ class TestStateRendering:
             assert pixel[:3] == settings.GROUND_COLOR
 
     def test_start_screen_shows_no_score(self, idle_game):
+        # The running score belongs to a round that has not started, so it must
+        # never leak onto the attract screen. The high score is a different
+        # thing: it is a result from earlier rounds and is shown on purpose.
         idle_game.render()
         before = pygame.image.tostring(idle_game.screen, "RGB")
         idle_game.score = 99
-        idle_game.high_score = 99
         idle_game.render()
         assert pygame.image.tostring(idle_game.screen, "RGB") == before
+
+    def test_start_screen_shows_the_high_score(self, idle_game):
+        idle_game.render()
+        without_best = pygame.image.tostring(idle_game.screen, "RGB")
+        idle_game.high_score = 99
+        idle_game.render()
+        assert pygame.image.tostring(idle_game.screen, "RGB") != without_best
 
     def test_playing_score_is_rendered(self, game):
         idle = snapshot(game)
@@ -1671,3 +1680,343 @@ def test_clamp_bounds_values():
     assert clamp(5, 0, 10) == 5
     assert clamp(-1, 0, 10) == 0
     assert clamp(11, 0, 10) == 10
+
+
+def palette_colors() -> set[tuple[int, int, int]]:
+    """Every colour the renderer is allowed to put on screen."""
+    from flappy_bird.visuals import BIRD_PALETTE, blend_color
+
+    colors: set[tuple[int, int, int]] = set()
+    for group in (
+        settings.DISTANT_COLORS,
+        settings.DISTANT_HIGHLIGHTS,
+        (
+            settings.PIPE_COLOR,
+            settings.PIPE_EDGE_COLOR,
+            settings.PIPE_CAP_COLOR,
+            settings.PIPE_HIGHLIGHT_COLOR,
+            settings.PIPE_SHADOW_COLOR,
+        ),
+        (
+            settings.GROUND_COLOR,
+            settings.GROUND_SOIL_COLOR,
+            settings.GROUND_SOIL_MARK_COLOR,
+            settings.GROUND_GRASS_EDGE_COLOR,
+            settings.GROUND_GRASS_BLADE_COLOR,
+        ),
+        (
+            settings.CLOUD_COLOR,
+            settings.CLOUD_SHADE_COLOR,
+            settings.SKY_TOP_COLOR,
+            settings.SKY_BOTTOM_COLOR,
+        ),
+        (
+            settings.BIRD_COLOR,
+            settings.TEXT_COLOR,
+            settings.TEXT_TITLE_COLOR,
+            settings.TEXT_HINT_COLOR,
+            settings.SCORE_PULSE_COLOR,
+            settings.DIFFICULTY_TEXT_COLOR,
+            settings.BACKGROUND_COLOR,
+            settings.PANEL_FILL_COLOR,
+            settings.PANEL_BORDER_COLOR,
+            settings.PANEL_SHADOW_COLOR,
+            settings.TEXT_SHADOW_COLOR,
+            settings.PANEL_TEXT_SHADOW_COLOR,
+        ),
+    ):
+        colors |= set(group)
+    colors |= set(BIRD_PALETTE.values())
+    for index in range(settings.SKY_BAND_COUNT):
+        colors.add(
+            blend_color(
+                settings.SKY_TOP_COLOR,
+                settings.SKY_BOTTOM_COLOR,
+                index / (settings.SKY_BAND_COUNT - 1),
+            )
+        )
+    return colors
+
+
+class TestNoSmoothedPixels:
+    """Nothing on screen may be anti-aliased or blended between two colours.
+
+    This is the check that actually holds the look together: if any part of the
+    renderer smoothed, resampled or blended, a colour would appear here that is
+    not in the palette, and the screen would no longer be pure pixel art.
+    """
+
+    def colors_on_screen(self, game: Game) -> set[tuple[int, int, int]]:
+        game.render()
+        width, height = game.screen.get_size()
+        return {
+            game.screen.get_at((x, y))[:3]
+            for y in range(0, height, 2)
+            for x in range(0, width, 2)
+        }
+
+    def test_the_start_screen_is_pure_palette(self, idle_game):
+        for _ in range(30):
+            idle_game.update(DT)
+        stray = self.colors_on_screen(idle_game) - palette_colors()
+        assert not stray, f"smoothed colours on the start screen: {sorted(stray)}"
+
+    def test_the_playing_screen_is_pure_palette(self, game):
+        game.pipe_manager.pipes.append(Pipe(x=250, gap_y=300))
+        game.pipe_manager.pipes.append(Pipe(x=400, gap_y=450))
+        stray = self.colors_on_screen(game) - palette_colors()
+        assert not stray, f"smoothed colours while playing: {sorted(stray)}"
+
+    def test_the_game_over_screen_is_pure_palette(self, game):
+        game.state = GameState.GAME_OVER
+        game.score = 12
+        game.high_score = 34
+        stray = self.colors_on_screen(game) - palette_colors()
+        assert not stray, f"smoothed colours on game over: {sorted(stray)}"
+
+    def test_every_layer_actually_reaches_the_screen(self, game):
+        # The other half of the check: a layer that silently stopped drawing
+        # would also pass the "no strays" test while leaving a hole.
+        game.pipe_manager.pipes.append(Pipe(x=250, gap_y=300))
+        game.score = 3
+        shown = self.colors_on_screen(game)
+        for name, color in (
+            ("sky", settings.SKY_TOP_COLOR),
+            ("far scenery", settings.DISTANT_COLORS[0]),
+            ("near scenery", settings.DISTANT_COLORS[1]),
+            ("cloud", settings.CLOUD_COLOR),
+            ("pipe", settings.PIPE_COLOR),
+            ("grass", settings.GROUND_COLOR),
+            ("soil", settings.GROUND_SOIL_COLOR),
+            ("bird", settings.BIRD_COLOR),
+        ):
+            assert color in shown, f"{name} is missing from the frame"
+
+
+class TestAttractScreenIsAlive:
+    """``START`` animates the decoration without simulating anything."""
+
+    def test_the_ground_scrolls_on_the_start_screen(self, idle_game):
+        idle_game.update(DT)
+        assert idle_game.visuals.ground.offset > 0
+
+    def test_the_clouds_drift_on_the_start_screen(self, idle_game):
+        before = [cloud.x for cloud in idle_game.visuals.clouds]
+        idle_game.update(DT)
+        assert [cloud.x for cloud in idle_game.visuals.clouds] != before
+
+    def test_the_scenery_drift_on_the_start_screen(self, idle_game):
+        before = [layer.offset for layer in idle_game.visuals.distant]
+        idle_game.update(DT)
+        assert [layer.offset for layer in idle_game.visuals.distant] != before
+
+    def test_the_idle_bob_moves(self, idle_game):
+        idle_game.update(DT)
+        first = idle_game.visuals.idle_bob
+        for _ in range(200):
+            idle_game.update(DT)
+            if idle_game.visuals.idle_bob != first:
+                break
+        assert idle_game.visuals.idle_bob != first
+
+    def test_a_long_wait_still_moves_nothing_but_the_decoration(self, idle_game):
+        y = idle_game.player.y
+        for _ in range(600):
+            idle_game.update(DT)
+        assert idle_game.player.y == y
+        assert idle_game.player.velocity_y == 0.0
+        assert idle_game.pipes == []
+        assert idle_game.score == 0
+        assert idle_game.state is GameState.START
+
+    def test_the_start_screen_actually_changes_over_time(self, idle_game):
+        idle_game.render()
+        before = snapshot(idle_game)
+        for _ in range(20):
+            idle_game.update(DT)
+        idle_game.render()
+        assert snapshot(idle_game) != before
+
+    def test_the_start_screen_animation_never_leaks_into_the_simulation(
+        self, idle_game
+    ):
+        # The decoration really is running (the ground has scrolled) and the
+        # simulation really has not moved at all.
+        offsets = set()
+        for _ in range(600):
+            idle_game.update(DT)
+            offsets.add(idle_game.visuals.ground.offset)
+        assert len(offsets) > 1, "the ground never scrolled"
+        assert idle_game.player.y == float(settings.BIRD_START_Y)
+        assert idle_game.player.velocity_y == 0.0
+        assert idle_game.player.x == float(settings.BIRD_START_X)
+        assert idle_game.pipes == []
+        assert idle_game.score == 0
+        assert idle_game.high_score == 0
+        assert idle_game.state is GameState.START
+
+    def test_starting_from_an_already_animated_attract_screen(self, idle_game):
+        for _ in range(90):
+            idle_game.update(DT)
+        press(idle_game, pygame.K_SPACE)
+        assert idle_game.state is GameState.PLAYING
+        assert idle_game.score == 0
+        assert idle_game.pipes == []
+        assert idle_game.player.y == float(settings.BIRD_START_Y)
+
+    def test_the_ground_freezes_on_game_over(self, game):
+        game.state = GameState.GAME_OVER
+        offset = game.visuals.ground.offset
+        clouds = [cloud.x for cloud in game.visuals.clouds]
+        scenery = [layer.offset for layer in game.visuals.distant]
+        bob = game.visuals.idle_bob
+        for _ in range(120):
+            game.update(DT)
+        assert game.visuals.ground.offset == offset
+        assert [cloud.x for cloud in game.visuals.clouds] == clouds
+        assert [layer.offset for layer in game.visuals.distant] == scenery
+        assert game.visuals.idle_bob == bob
+
+    def test_the_game_over_screen_settles(self, game):
+        game.state = GameState.GAME_OVER
+        game.render()
+        before = snapshot(game)
+        for _ in range(60):
+            game.update(DT)
+        game.render()
+        assert snapshot(game) == before
+
+
+class TestStartScreenLayout:
+    """The attract screen has to read as a title, not as a menu card."""
+
+    def test_the_title_fits_on_screen(self, idle_game):
+        from flappy_bird.pixelfont import PixelFont
+
+        width = PixelFont.text_width("FLAPPY BIRD", settings.TITLE_TEXT_SCALE)
+        assert 0 < width < settings.SCREEN_WIDTH
+
+    def test_the_title_is_the_largest_text_on_screen(self):
+        from flappy_bird.pixelfont import PixelFont
+
+        assert (
+            PixelFont.line_height(settings.TITLE_TEXT_SCALE)
+            > PixelFont.line_height(settings.PANEL_TITLE_SCALE)
+            > PixelFont.line_height(settings.PANEL_TEXT_SCALE)
+        )
+
+    def test_the_idle_bird_is_prominent(self, idle_game):
+        player = idle_game.visuals.bird.frame(0.0)
+        title = idle_game.visuals.title_bird.frame(0.0)
+        assert title.get_width() > player.get_width() * 1.4
+
+    def test_the_idle_bird_stays_inside_the_playable_area(self, idle_game):
+        sprite = idle_game.visuals.title_bird.frame(0.0)
+        for _ in range(400):
+            idle_game.update(DT)
+        top = settings.TITLE_BIRD_Y + min(settings.IDLE_BOB_STEPS)
+        bottom = settings.TITLE_BIRD_Y + max(settings.IDLE_BOB_STEPS)
+        assert top - sprite.get_height() // 2 > 0
+        assert bottom + sprite.get_height() // 2 < settings.GROUND_TOP
+
+    def test_the_prompt_and_hint_fit_on_screen(self, idle_game):
+        from flappy_bird.pixelfont import PixelFont
+
+        for text in ("PRESS SPACE TO START", "CLICK OR W TO FLAP", "BEST: 999"):
+            assert (
+                PixelFont.text_width(text, settings.PANEL_TEXT_SCALE)
+                < settings.SCREEN_WIDTH
+            )
+
+    def test_the_card_content_stays_inside_the_screen(self, idle_game):
+        # A score long enough to be silly must not push the card off screen.
+        idle_game.state = GameState.GAME_OVER
+        idle_game.score = 123456
+        idle_game.high_score = 123456
+        idle_game.render()
+        panel = idle_game.visuals.panels.render(
+            "GAME OVER",
+            [f"Score: {idle_game.score}", f"Best: {idle_game.high_score}"],
+            idle_game.visuals.labeler(settings.PANEL_TITLE_SCALE),
+            idle_game.visuals.labeler(settings.PANEL_TEXT_SCALE),
+        )
+        assert panel.get_width() < settings.SCREEN_WIDTH
+        assert panel.get_height() < settings.SCREEN_HEIGHT
+
+    def test_the_start_screen_is_not_a_card(self, idle_game):
+        # The card is the game-over look; reusing it here is what the attract
+        # screen is supposed to stop doing.
+        idle_game.render()
+        shown = self_colors(idle_game)
+        assert settings.PANEL_FILL_COLOR not in shown
+
+    def test_the_game_over_screen_is_a_card(self, game):
+        game.state = GameState.GAME_OVER
+        shown = self_colors(game)
+        assert settings.PANEL_FILL_COLOR in shown
+
+
+def self_colors(game: Game) -> set[tuple[int, int, int]]:
+    game.render()
+    width, height = game.screen.get_size()
+    return {
+        game.screen.get_at((x, y))[:3]
+        for y in range(0, height, 2)
+        for x in range(0, width, 2)
+    }
+
+
+class TestWorldLayerOrder:
+    """The world is composited back to front."""
+
+    def test_pipes_cover_the_distant_scenery(self, game):
+        game.pipe_manager.pipes.append(Pipe(x=200, gap_y=300))
+        game.render()
+        # Somewhere the far band crosses the pipe, the pipe has to win.
+        assert contains_color(game.screen, settings.PIPE_COLOR)
+
+    def test_the_ground_covers_the_bottom_of_a_pipe(self, game):
+        pipe = Pipe(x=200, gap_y=300)
+        game.pipe_manager.pipes.append(pipe)
+        game.render()
+        row = pipe.bottom_rect.bottom - 1
+        assert 0 < row < settings.GROUND_TOP
+        assert game.screen.get_at((round(pipe.x) + 5, row))[:3] != settings.PIPE_COLOR
+
+    def test_the_bird_is_drawn_over_the_sky(self, game):
+        game.render()
+        x, y = round(game.player.x), round(game.player.y)
+        assert game.screen.get_at((x, y))[:3] != settings.SKY_TOP_COLOR
+
+    def test_the_ground_covers_a_bird_that_sank_into_it(self, game):
+        # The bird is drawn before the ground, so the ground has the last word.
+        game.player.y = settings.GROUND_TOP - 2
+        game.render()
+        x = round(game.player.x)
+        assert (
+            game.screen.get_at((x, settings.GROUND_TOP + 4))[:3] != settings.BIRD_COLOR
+        )
+
+    def test_the_scenery_sits_below_the_clouds(self, game):
+        game.render()
+        for cloud in game.visuals.clouds:
+            top = min(settings.SKY_TOP_COLOR, settings.SKY_TOP_COLOR)
+            assert top == settings.SKY_TOP_COLOR
+            if cloud.y < settings.DISTANT_BASE_Y - settings.DISTANT_HEIGHTS[-1]:
+                # A cloud high in the sky cannot be painted over by the hills.
+                assert cloud.y + cloud.height <= settings.DISTANT_BASE_Y
+
+    def test_each_layer_appears_above_the_one_behind_it(self, game):
+        game.pipe_manager.pipes.append(Pipe(x=200, gap_y=300))
+        game.score = 5
+        game.render()
+        shown = self_colors(game)
+        order = (
+            ("sky", settings.SKY_TOP_COLOR),
+            ("scenery", settings.DISTANT_COLORS[0]),
+            ("cloud", settings.CLOUD_COLOR),
+            ("pipe", settings.PIPE_COLOR),
+            ("ground", settings.GROUND_COLOR),
+        )
+        for _, color in order:
+            assert color in shown

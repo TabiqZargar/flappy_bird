@@ -18,12 +18,17 @@ from flappy_bird.visuals import (
     BIRD_PALETTE,
     BIRD_SHADOW_COLOR,
     BIRD_WING_PIXELS,
+    CLOUD_PROFILE,
+    DISTANT_PROFILES,
     BirdSprite,
     PanelCache,
+    SceneryField,
     TextCache,
     Visuals,
+    blend_color,
     build_cloud,
     build_sky,
+    cloud_block_size,
     tilt_for_velocity,
 )
 from tests.helpers import DT
@@ -793,3 +798,369 @@ class TestPipeVisuals:
 
     def test_tiny_pipe_renders(self, surface):
         Pipe(x=100, gap_y=300, gap=4).draw(surface)
+
+
+class TestSkyBanding:
+    """The sky is cel shaded: flat bands with hard edges, not a smooth ramp."""
+
+    @staticmethod
+    def band_edges(sky: pygame.Surface) -> list[int]:
+        """Rows where the sky colour changes."""
+        return [
+            y
+            for y in range(1, sky.get_height())
+            if sky.get_at((0, y))[:3] != sky.get_at((0, y - 1))[:3]
+        ]
+
+    def test_has_one_band_per_step(self):
+        sky = build_sky()
+        assert len(self.band_edges(sky)) == settings.SKY_BAND_COUNT - 1
+
+    def test_bands_get_taller_towards_the_horizon(self):
+        # A calm top of screen and stepped detail near the ground: the reverse
+        # would put visible steps behind the title.
+        sky = build_sky()
+        edges = [0, *self.band_edges(sky), sky.get_height()]
+        heights = [b - a for a, b in zip(edges, edges[1:], strict=False)]
+        assert heights == sorted(heights)
+
+    def test_every_band_is_one_flat_colour(self):
+        # The joins are steps, not gradients: a whole row shares one colour.
+        sky = build_sky()
+        for y in range(sky.get_height()):
+            row = {sky.get_at((x, y))[:3] for x in range(0, sky.get_width(), 7)}
+            assert len(row) == 1
+
+    def test_bands_step_through_the_palette(self):
+        sky = build_sky()
+        expected = [
+            blend_color(
+                settings.SKY_TOP_COLOR,
+                settings.SKY_BOTTOM_COLOR,
+                index / (settings.SKY_BAND_COUNT - 1),
+            )
+            for index in range(settings.SKY_BAND_COUNT)
+        ]
+        assert (
+            list(dict.fromkeys(sky.get_at((0, y))[:3] for y in range(sky.get_height())))
+            == expected
+        )
+
+    def test_extremes_are_exact(self):
+        sky = build_sky()
+        assert sky.get_at((0, 0))[:3] == settings.SKY_TOP_COLOR
+        assert sky.get_at((0, sky.get_height() - 1))[:3] == settings.SKY_BOTTOM_COLOR
+
+    def test_a_single_band_still_covers_the_screen(self):
+        sky = build_sky(bands=1)
+        assert sky.get_size() == (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
+        assert self.band_edges(sky) == []
+        assert {
+            sky.get_at((x, y))[:3]
+            for y in range(sky.get_height())
+            for x in range(0, sky.get_width(), 13)
+        } == {settings.SKY_TOP_COLOR}
+
+
+class TestPixelClouds:
+    """Clouds are built from hard blocks on the shared pixel grid."""
+
+    def test_block_size_is_never_fractional(self):
+        for step in range(5, 30):
+            assert float(cloud_block_size(step / 10)).is_integer()
+
+    def test_every_edge_lands_on_the_pixel_grid(self):
+        for scale in (0.65, 1.0, 1.45):
+            block = cloud_block_size(scale)
+            cloud = build_cloud(scale)
+            assert cloud.get_width() % block == 0
+            assert cloud.get_height() % block == 0
+
+    def test_uses_only_the_two_cloud_colours(self):
+        cloud = build_cloud(1.0)
+        opaque = {
+            cloud.get_at((x, y))[:3]
+            for y in range(cloud.get_height())
+            for x in range(cloud.get_width())
+            if cloud.get_at((x, y))[3]
+        }
+        assert opaque == {settings.CLOUD_COLOR, settings.CLOUD_SHADE_COLOR}
+
+    def test_colour_changes_land_on_block_boundaries(self):
+        # The cloud is drawn as block-aligned rectangles, so every edge of
+        # colour falls on a multiple of the block size. Anything else would mean
+        # the sprite had been resampled instead of scaled up.
+        block = cloud_block_size(1.0)
+        cloud = build_cloud(1.0)
+        width, height = cloud.get_width(), cloud.get_height()
+        for y in range(height):
+            for x in range(1, width):
+                if cloud.get_at((x, y))[:3] != cloud.get_at((x - 1, y))[:3]:
+                    assert x % block == 0, f"vertical edge at ({x}, {y})"
+        for x in range(width):
+            for y in range(1, height):
+                if cloud.get_at((x, y))[:3] != cloud.get_at((x, y - 1))[:3]:
+                    assert y % block == 0, f"horizontal edge at ({x}, {y})"
+
+    def test_the_underside_is_shaded(self):
+        cloud = build_cloud(1.0)
+        bottom = cloud.get_height() - 1
+        assert cloud.get_at((0, bottom))[:3] == settings.CLOUD_SHADE_COLOR
+
+    def test_the_profile_has_no_gap(self):
+        # Consecutive columns must overlap in height, or the cloud falls apart.
+        assert len(CLOUD_PROFILE) == settings.CLOUD_BASE_WIDTH
+        for near, far in zip(CLOUD_PROFILE, CLOUD_PROFILE[1:], strict=False):
+            assert abs(near - far) <= 2
+
+
+class TestDistantScenery:
+    """Two silhouette bands behind the clouds, nearer ones faster and darker."""
+
+    @staticmethod
+    def field() -> SceneryField:
+        return SceneryField()
+
+    def test_has_the_two_configured_layers(self):
+        assert len(self.field()) == len(DISTANT_PROFILES)
+
+    def test_near_layers_move_faster_than_far_ones(self):
+        speeds = [layer.speed for layer in self.field()]
+        assert speeds == sorted(speeds)
+        assert speeds[0] < speeds[-1]
+
+    def test_near_layers_are_darker_than_far_ones(self):
+        far, near = settings.DISTANT_COLORS
+        assert sum(far) > sum(near), "the nearer band should read as further away"
+
+    def test_every_layer_stands_on_the_collision_line(self):
+        for layer in self.field():
+            assert layer.base_y == settings.GROUND_TOP
+            assert layer.top + layer.height == settings.GROUND_TOP
+
+    def test_no_gap_can_open_between_a_layer_and_the_ground(self):
+        # The bands reach the same y the ground is drawn from, so however the
+        # offset lands there is always ground underneath.
+        for layer in self.field():
+            bottom = layer.top + layer.height
+            assert bottom == settings.GROUND_TOP
+
+    def test_update_scrolls_the_offset(self):
+        layer = self.field().layers[0]
+        layer.update(1.0)
+        assert layer.offset > 0
+
+    def test_offset_stays_inside_one_repeat(self):
+        for layer in self.field():
+            for _ in range(1000):
+                layer.update(DT)
+                assert 0.0 <= layer.offset < layer.tile_width
+
+    def test_the_tile_is_a_whole_number_of_pixels_wide(self):
+        for layer in self.field():
+            assert layer._tile.get_width() == settings.DISTANT_TILE_WIDTH
+            assert layer._tile.get_width() % settings.PIXEL_SCALE == 0
+
+    def test_the_crest_fits_inside_its_layer(self):
+        for layer, profile in zip(self.field(), DISTANT_PROFILES, strict=True):
+            assert max(profile) * settings.PIXEL_SCALE <= layer.height
+
+    def test_the_repeat_is_seamless(self):
+        # The first and last columns share a height, so the join is invisible.
+        for profile in DISTANT_PROFILES:
+            assert profile[0] == profile[-1]
+
+    def test_the_tile_is_transparent_above_the_crest(self):
+        for layer, profile in zip(self.field(), DISTANT_PROFILES, strict=True):
+            crest = layer.height - max(profile) * settings.PIXEL_SCALE
+            assert crest > 0
+            assert layer._tile.get_at((0, 0))[3] == 0
+
+    def test_every_band_reaches_the_ground_at_every_column(self, surface):
+        # The bands are what stand between the sky and the ground, so a single
+        # uncovered column would show sky at the horizon.
+        field = self.field()
+        surface.fill((1, 2, 3))
+        field.draw(surface)
+        for layer in field:
+            for x in range(surface.get_width()):
+                assert surface.get_at((x, layer.base_y - 1))[:3] != (1, 2, 3)
+
+    def test_drawing_changes_the_screen(self, surface):
+        before = snapshot(surface)
+        self.field().draw(surface)
+        assert snapshot(surface) != before
+
+    def test_update_never_rebuilds_the_tile(self, surface):
+        # Scrolling is arithmetic; the cached silhouette is what gets blitted.
+        layer = self.field().layers[0]
+        tile = layer._tile
+        layer.update(DT)
+        layer.draw(surface)
+        assert layer._tile is tile
+
+
+class TestGroundArtwork:
+    """The ground band is pixel art on the same grid as everything else."""
+
+    def test_the_grass_band_is_grass_green(self):
+        tile = Visuals().ground._tile
+        last_grass_row = settings.GROUND_GRASS_HEIGHT - 1
+        assert tile.get_at((0, last_grass_row))[:3] == settings.GROUND_COLOR
+
+    def test_the_top_lip_is_darker_than_the_grass(self):
+        tile = Visuals().ground._tile
+        assert sum(tile.get_at((0, 0))[:3]) < sum(tile.get_at((0, 4))[:3])
+
+    def test_blades_are_drawn(self):
+        tile = Visuals().ground._tile
+        colors = {tile.get_at((column, 4))[:3] for column in range(tile.get_width())}
+        assert settings.GROUND_GRASS_BLADE_COLOR in colors
+
+    def test_blades_sit_on_whole_pixel_columns(self):
+        # A blade one pixel wide would break the shared grid.
+        for column in settings.GROUND_BLADE_COLUMNS:
+            assert column % settings.PIXEL_SCALE == 0
+
+    def test_the_soil_carries_pebbles(self):
+        tile = Visuals().ground._tile
+        colors = {
+            tile.get_at((x, y))[:3]
+            for y in range(settings.GROUND_GRASS_HEIGHT, tile.get_height())
+            for x in range(tile.get_width())
+        }
+        assert settings.GROUND_SOIL_MARK_COLOR in colors
+        assert settings.GROUND_SOIL_COLOR in colors
+
+    def test_the_repeat_stays_a_multiple_of_the_pixel_grid(self):
+        assert settings.GROUND_TILE_WIDTH % settings.PIXEL_SCALE == 0
+
+
+class TestDeterminism:
+    """The same seed and the same ``dt`` must give the same frame, every time."""
+
+    @staticmethod
+    def render_after(seed: int, steps: int, surface: pygame.Surface) -> bytes:
+        visuals = Visuals(rng=random.Random(seed))
+        for _ in range(steps):
+            visuals.update(DT)
+        surface.fill((0, 0, 0))
+        visuals.draw_sky(surface)
+        visuals.draw_distant(surface)
+        visuals.draw_clouds(surface)
+        visuals.draw_ground(surface)
+        return snapshot(surface)
+
+    def test_the_same_seed_gives_the_same_frame(self, surface):
+        first = self.render_after(11, 200, surface)
+        second = self.render_after(11, 200, surface)
+        assert first == second
+
+    def test_different_seeds_give_different_frames(self, surface):
+        first = self.render_after(11, 200, surface)
+        other = self.render_after(12, 200, surface)
+        assert first != other, "the seed has to actually reach the cloud field"
+
+    def test_a_different_number_of_steps_gives_a_different_frame(self, surface):
+        assert self.render_after(11, 200, surface) != self.render_after(
+            11, 201, surface
+        )
+
+    def test_rendering_twice_never_changes_the_scene(self, surface):
+        visuals = Visuals(rng=random.Random(3))
+        for _ in range(60):
+            visuals.update(DT)
+        surface.fill((0, 0, 0))
+        visuals.draw_clouds(surface)
+        first = snapshot(surface)
+        surface.fill((0, 0, 0))
+        visuals.draw_clouds(surface)
+        assert snapshot(surface) == first
+
+    def test_an_unseeded_field_is_still_built_once(self):
+        # The layout is random per scene, but it is fixed for the life of that
+        # scene: nothing consults the rng again while animating.
+        visuals = Visuals()
+        positions = [cloud.x for cloud in visuals.clouds]
+        for _ in range(120):
+            visuals.update(DT)
+        for cloud, before in zip(visuals.clouds, positions, strict=True):
+            assert cloud.x < before
+
+
+class TestAttractScreenAnimation:
+    """The idle bob and the blink, which must never touch the simulation."""
+
+    def test_the_bob_is_always_a_whole_number_of_pixels(self, visuals):
+        for _ in range(600):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+            assert isinstance(visuals.idle_bob, int)
+
+    def test_the_bob_visits_every_step_in_the_table(self, visuals):
+        seen = set()
+        for _ in range(4000):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+            seen.add(visuals.idle_bob)
+        assert seen == set(settings.IDLE_BOB_STEPS)
+
+    def test_the_bob_wraps_within_its_table(self, visuals):
+        for _ in range(600):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+            assert -2 <= visuals.idle_bob <= 5
+
+    def test_zero_dt_leaves_the_bob_alone(self, visuals):
+        visuals.update(0.5)
+        bob = visuals.idle_bob
+        visuals.update(0.0)
+        assert visuals.idle_bob == bob
+
+    def test_a_frozen_scene_stops_the_bob(self, visuals):
+        visuals.update(0.5)
+        bob = visuals.idle_bob
+        for _ in range(120):
+            visuals.update(DT, animate_bird=False, drift_clouds=False)
+        assert visuals.idle_bob == bob
+
+    def test_the_bob_never_leaves_the_centre_line(self, visuals):
+        # The attract bird is drawn from a fixed centre; the bob is the only
+        # thing that moves it, so the drift stays tiny.
+        assert max(settings.IDLE_BOB_STEPS) - min(settings.IDLE_BOB_STEPS) <= 8
+
+    def test_the_prompt_blinks(self, visuals):
+        seen = set()
+        for _ in range(4000):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+            seen.add(visuals.prompt_visible)
+        assert seen == {True, False}
+
+    def test_the_prompt_is_lit_for_more_of_the_beat_than_it_is_dark(self):
+        assert settings.PROMPT_VISIBLE_FRACTION > 0.5
+
+    def test_the_wing_still_beats_on_the_attract_screen(self, visuals):
+        before = visuals.bird.wing_index
+        for _ in range(30):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+        assert visuals.bird.wing_index != before
+
+    def test_the_title_bird_is_the_same_sprite_only_larger(self, visuals):
+        player = visuals.bird.frame(0.0)
+        title = visuals.title_bird.frame(0.0)
+        assert title.get_width() > player.get_width()
+        assert visuals.title_bird.scale > visuals.bird.scale
+        # Same authored grid, so the palette cannot have drifted between them.
+        assert visuals.title_bird.logical_size == visuals.bird.logical_size
+
+    def test_the_title_bird_flaps_too(self, visuals):
+        before = visuals.title_bird.wing_index
+        for _ in range(30):
+            visuals.update(DT, animate_bird=True, drift_clouds=False)
+        assert visuals.title_bird.wing_index != before
+
+    def test_animating_the_scene_builds_no_new_surfaces(self, visuals):
+        # Everything moving is a cached blit, so the sprite caches stay put.
+        sprites = (len(visuals.bird), len(visuals.title_bird))
+        tiles = visuals.clouds.clouds[0].image
+        for _ in range(300):
+            visuals.update(DT)
+        assert (len(visuals.bird), len(visuals.title_bird)) == sprites
+        assert visuals.clouds.clouds[0].image is tiles

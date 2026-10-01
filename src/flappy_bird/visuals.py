@@ -1,23 +1,31 @@
-"""Presentation layer: sky, clouds, ground, the bird sprite and UI surfaces.
+"""Presentation layer: sky, scenery, clouds, ground, the bird sprite and UI.
 
 Everything in this module is decorative. It reads gameplay values (a position,
 a velocity) but never writes them: the collision rectangles, the physics and the
 scoring state are untouched by anything drawn here.
 
-Surfaces are expensive to build, so the static parts (the sky gradient, each
-cloud, the ground tile and every bird pose) are rendered once and then blitted.
-The only per-frame work is arithmetic and a handful of ``blit`` calls.
+The look is uniform pixel art. Rather than draw smooth shapes and let the
+platform anti-alias them, every element is authored as a small grid of on/off
+cells and blown up with ``pygame.transform.scale``, which is nearest neighbour.
+The bird is the reference: a 17x17 grid, the same 5x7 font as the UI, and the
+same ground, pipe and scenery blocks, all on one shared ``PIXEL_SCALE`` grid.
+
+Surfaces are expensive to build, so the static parts (the sky bands, the scenery
+tiles, each cloud, the ground tile and every bird pose) are rendered once and
+then blitted. The only per-frame work is arithmetic and a handful of ``blit``
+calls.
 """
 
 from __future__ import annotations
 
 import random
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pygame
 
 from . import settings
+from .pixelfont import PixelFont
 from .utils import centered_rect, clamp
 
 if TYPE_CHECKING:
@@ -28,11 +36,85 @@ if TYPE_CHECKING:
 # --- Text -------------------------------------------------------------------
 
 
+class Labeler(Protocol):
+    """Anything that can paint a line of text and say how big it is.
+
+    Both UI back-ends satisfy this: Pygame's bundled smooth font, and the
+    hand-authored bitmap font. The caches below are written against the protocol
+    rather than against one of them, so the game can mix both freely.
+    """
+
+    def render(self, text: str, color: tuple[int, int, int]) -> pygame.Surface:
+        """Return a surface with ``text`` drawn in ``color``."""
+
+    def measure(self, text: str) -> tuple[int, int]:
+        """Return the ``(width, height)`` ``render`` would produce."""
+
+
+class SmoothLabeler:
+    """Wraps ``pygame.font.Font``, Pygame's one bundled anti-aliased font."""
+
+    def __init__(self, font: pygame.font.Font) -> None:
+        self.font = font
+
+    def render(self, text: str, color: tuple[int, int, int]) -> pygame.Surface:
+        return self.font.render(text, True, color)
+
+    def measure(self, text: str) -> tuple[int, int]:
+        # Antialiasing cannot change the advance widths, so measuring against a
+        # throwaway label is the same answer as measuring against a real one.
+        label = self.font.render(text, True, settings.TEXT_COLOR)
+        return label.get_width(), label.get_height()
+
+
+class PixelLabeler:
+    """Wraps :class:`~flappy_bird.pixelfont.PixelFont` at a fixed pixel scale."""
+
+    def __init__(self, pixelfont: PixelFont, scale: int) -> None:
+        self.pixelfont = pixelfont
+        self.scale = max(scale, 1)
+
+    def render(self, text: str, color: tuple[int, int, int]) -> pygame.Surface:
+        return self.pixelfont.render(text, self.scale, color)
+
+    def measure(self, text: str) -> tuple[int, int]:
+        return (
+            self.pixelfont.text_width(text, self.scale),
+            self.pixelfont.line_height(self.scale),
+        )
+
+
+#: One wrapper per font object, so cache keys stay stable across frames and the
+#: caches cannot grow a second entry for the same font. The font is kept alive
+#: alongside the wrapper because the key is its ``id``.
+_LABELERS: dict[int, tuple[object, Labeler]] = {}
+
+
+def as_labeler(renderer: object) -> Labeler:
+    """Adapt ``renderer`` to the :class:`Labeler` protocol.
+
+    Accepts an already-adapted labeler, a raw ``pygame.font.Font`` or a bare
+    :class:`PixelFont` (drawn at scale 1), so callers holding either can keep
+    handing it straight to the caches.
+    """
+    if isinstance(renderer, SmoothLabeler | PixelLabeler):
+        return renderer
+    cached = _LABELERS.get(id(renderer))
+    if cached is not None and cached[0] is renderer:
+        return cached[1]
+    if isinstance(renderer, PixelFont):
+        labeler: Labeler = PixelLabeler(renderer, 1)
+    else:
+        labeler = SmoothLabeler(renderer)  # type: ignore[arg-type]
+    _LABELERS[id(renderer)] = (renderer, labeler)
+    return labeler
+
+
 class TextCache:
     """Renders each unique string once and reuses the surface afterwards.
 
-    Keyed by the font object as well as the text, so the title, the banner and
-    the score never collide in the cache.
+    Keyed by the labeler as well as the text and colour, so the score, the title
+    and the difficulty readout never collide even though they share a font.
     """
 
     def __init__(self) -> None:
@@ -40,14 +122,15 @@ class TextCache:
 
     def render(
         self,
-        font: pygame.font.Font,
+        font: object,
         text: str,
         color: tuple[int, int, int] = settings.TEXT_COLOR,
     ) -> pygame.Surface:
-        key = (id(font), text, color)
+        labeler = as_labeler(font)
+        key = (id(labeler), text, color)
         surface = self._surfaces.get(key)
         if surface is None:
-            surface = font.render(text, True, color)
+            surface = labeler.render(text, color)
             self._surfaces[key] = surface
         return surface
 
@@ -59,10 +142,12 @@ class TextCache:
 
 
 class PanelCache:
-    """Builds centered UI cards and keeps the most recent ones around.
+    """Builds blocky UI cards and keeps the most recent ones around.
 
-    The game-over card changes whenever the score does, so the cache is bounded
-    and drops the oldest entry rather than growing without limit.
+    The card changes whenever the score does, so the cache is bounded and drops
+    the oldest entry rather than growing without limit. Each card is a hard
+    border, a light body and a drop shadow, drawn on whole pixels -- no rounded
+    corners, no translucency over the world.
     """
 
     MAX_PANELS = 24
@@ -76,11 +161,17 @@ class PanelCache:
         self,
         title: str,
         lines: list[str],
-        title_font: pygame.font.Font,
-        body_font: pygame.font.Font,
+        title_font: object,
+        body_font: object,
         color: tuple[int, int, int] = settings.TEXT_COLOR,
     ) -> pygame.Surface:
-        key = (title, tuple(lines), id(title_font), id(body_font), tuple(color))
+        key = (
+            title,
+            tuple(lines),
+            id(as_labeler(title_font)),
+            id(as_labeler(body_font)),
+            tuple(color),
+        )
         panel = self._panels.get(key)
         if panel is None:
             panel = self._build(title, lines, title_font, body_font, color)
@@ -93,14 +184,16 @@ class PanelCache:
         self,
         title: str,
         lines: list[str],
-        title_font: pygame.font.Font,
-        body_font: pygame.font.Font,
+        title_font: object,
+        body_font: object,
         color: tuple[int, int, int],
     ) -> pygame.Surface:
-        title_label = title_font.render(title, True, color)
-        line_labels = [body_font.render(line, True, color) for line in lines]
+        title_labeler = as_labeler(title_font)
+        body_labeler = as_labeler(body_font)
+        title_label = title_labeler.render(title, color)
+        line_labels = [body_labeler.render(line, color) for line in lines]
 
-        line_height = body_font.get_height()
+        line_height = body_labeler.measure(lines[0] if lines else "")[1]
         width = max(label.get_width() for label in [title_label, *line_labels])
         width += self.PADDING * 2
         height = (
@@ -110,13 +203,33 @@ class PanelCache:
             + (line_height + self.LINE_GAP) * len(line_labels)
         )
 
-        panel = pygame.Surface((width, height), pygame.SRCALPHA)
-        panel.fill((255, 255, 255, 232))
+        offset = settings.PANEL_SHADOW_OFFSET
+        panel = pygame.Surface((width + offset, height + offset), pygame.SRCALPHA)
+        # The shadow is the whole card pushed down and right, so it reads as one
+        # solid block rather than a soft glow.
+        pygame.draw.rect(
+            panel,
+            settings.PANEL_SHADOW_COLOR,
+            pygame.Rect(offset, offset, width, height),
+        )
+        body = pygame.Rect(0, 0, width, height)
+        pygame.draw.rect(panel, settings.PANEL_FILL_COLOR, body)
         # A slim accent bar along the top edge.
         pygame.draw.rect(
             panel,
-            (255, 214, 10, 255),
-            pygame.Rect(0, 0, width, max(self.PADDING // 2, 2)),
+            settings.PANEL_BORDER_COLOR,
+            body,
+            settings.PANEL_BORDER_WIDTH,
+        )
+        pygame.draw.rect(
+            panel,
+            settings.SCORE_PULSE_COLOR,
+            pygame.Rect(
+                settings.PANEL_BORDER_WIDTH,
+                settings.PANEL_BORDER_WIDTH,
+                width - settings.PANEL_BORDER_WIDTH * 2,
+                settings.PANEL_BORDER_WIDTH,
+            ),
         )
 
         y = self.PADDING
@@ -132,8 +245,8 @@ class PanelCache:
         surface: pygame.Surface,
         title: str,
         lines: list[str],
-        title_font: pygame.font.Font,
-        body_font: pygame.font.Font,
+        title_font: object,
+        body_font: object,
         color: tuple[int, int, int] = settings.TEXT_COLOR,
     ) -> None:
         """Render (or reuse) the card and blit it centered on ``surface``."""
@@ -171,18 +284,43 @@ def build_sky(
     height: int = settings.SCREEN_HEIGHT,
     top_color: tuple[int, int, int] = settings.SKY_TOP_COLOR,
     bottom_color: tuple[int, int, int] = settings.SKY_BOTTOM_COLOR,
-    bands: int = 64,
+    bands: int = settings.SKY_BAND_COUNT,
 ) -> pygame.Surface:
-    """Build the vertical sky gradient as a single opaque surface.
+    """Build the sky as a stack of hard-edged horizontal colour bands.
 
-    One row per band is drawn on a 1-pixel-wide surface and then stretched, so
-    the whole sky costs one blit per frame regardless of the band count.
+    Every band is one flat colour, so the joins between them are visible steps
+    rather than a smooth ramp -- the retro cel-shaded look, and the reason the
+    sky reads as pixel art next to the rest of the scene.
+
+    Band heights grow towards the horizon (``1, 2, 3, ...`` of the available
+    rows). That keeps the top of the screen, where the title sits, almost
+    perfectly flat, and puts the visible steps down where the eye is already
+    tracking the pipes.
+
+    The first band is exactly ``top_color`` and the last row of the screen is
+    exactly ``bottom_color``, so the palette never drifts at the extremes.
     """
-    strip = pygame.Surface((1, bands))
-    for index in range(bands):
-        fraction = index / max(bands - 1, 1)
-        strip.set_at((0, index), blend_color(top_color, bottom_color, fraction))
-    return pygame.transform.scale(strip, (width, height))
+    sky = pygame.Surface((width, height))
+    count = max(bands, 1)
+
+    weights = list(range(1, count + 1))
+    total = sum(weights)
+    edges = [0]
+    running = 0
+    for weight in weights:
+        running += weight
+        edges.append(round(height * running / total))
+    edges[-1] = height
+
+    for index in range(count):
+        fraction = index / max(count - 1, 1)
+        top = edges[index]
+        band_height = max(edges[index + 1] - top, 1)
+        sky.fill(
+            blend_color(top_color, bottom_color, fraction),
+            pygame.Rect(0, top, width, band_height),
+        )
+    return sky
 
 
 # --- Clouds -----------------------------------------------------------------
@@ -274,35 +412,308 @@ class CloudField:
         return len(self.clouds)
 
 
+#: The puffy silhouette of a cloud, one integer per authored column: how far down
+#: from the top of the grid the cloud's top edge sits. Two humps with a dip
+#: between them, which is what stops it reading as a rounded rectangle. Read as
+#: a picture it is the outline of the cloud, upside down.
+CLOUD_PROFILE: tuple[int, ...] = (
+    4,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    10,
+    11,
+    11,
+    10,
+    9,
+    8,
+    6,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    11,
+    10,
+)
+
+if len(CLOUD_PROFILE) != settings.CLOUD_BASE_WIDTH:
+    raise ValueError(
+        f"cloud profile has {len(CLOUD_PROFILE)} columns, "
+        f"expected {settings.CLOUD_BASE_WIDTH}"
+    )
+if max(CLOUD_PROFILE) > settings.CLOUD_BASE_HEIGHT - settings.CLOUD_SHADE_HEIGHT:
+    raise ValueError("cloud profile is taller than the grid allows")
+
+
+def cloud_block_size(scale: float) -> int:
+    """Whole-pixel block size for a cloud drawn at ``scale``.
+
+    Rounding to a whole number of blocks is what keeps every cloud edge on the
+    pixel grid; a fractional block would resample the authored puffs.
+    """
+    return max(
+        settings.CLOUD_MIN_BLOCK,
+        round(scale * settings.CLOUD_BLOCK_PER_SCALE),
+    )
+
+
 def build_cloud(
     scale: float = 1.0,
     color: tuple[int, int, int] = settings.CLOUD_COLOR,
     shade: tuple[int, int, int] = settings.CLOUD_SHADE_COLOR,
 ) -> pygame.Surface:
-    """Build one soft cloud from overlapping circles on a transparent surface."""
-    width = max(round(settings.CLOUD_BASE_WIDTH * scale), 8)
-    height = max(round(settings.CLOUD_BASE_HEIGHT * scale), 6)
+    """Build one cloud from the authored profile, on a transparent surface.
+
+    Every column is a stack of ``block``-square cells, so the puffs are hard
+    steps rather than the smooth ellipses a circle would draw. The flat rows
+    along the bottom are the shaded underside.
+    """
+    block = cloud_block_size(scale)
+    columns = settings.CLOUD_BASE_WIDTH
+    rows = settings.CLOUD_BASE_HEIGHT
+    width = columns * block
+    height = rows * block
     image = pygame.Surface((width, height), pygame.SRCALPHA)
 
-    # A flat, slightly darker base keeps the cloud sitting on its own shadow.
-    pygame.draw.ellipse(image, shade, pygame.Rect(0, height // 2, width, height // 2))
-    puffs = (
-        (0.16, 0.62, 0.46),
-        (0.42, 0.44, 0.62),
-        (0.72, 0.58, 0.48),
-    )
-    for center_x, center_y, radius in puffs:
-        radius_px = max(round(height * radius), 2)
-        pygame.draw.circle(
+    body_bottom = rows - settings.CLOUD_SHADE_HEIGHT
+    for column, profile in enumerate(CLOUD_PROFILE):
+        top = rows - profile
+        body_height = max(body_bottom - top, 0)
+        if body_height:
+            pygame.draw.rect(
+                image,
+                color,
+                pygame.Rect(column * block, top * block, block, body_height * block),
+            )
+        pygame.draw.rect(
             image,
-            color,
-            (
-                round(width * center_x),
-                round(height * center_y),
+            shade,
+            pygame.Rect(
+                column * block,
+                body_bottom * block,
+                block,
+                (rows - body_bottom) * block,
             ),
-            radius_px,
         )
     return image
+
+
+# --- Distant scenery --------------------------------------------------------
+#
+# Two silhouette bands between the sky and the clouds. They are the depth cue:
+# the far one is pale, tall and barely moving, the near one is darker, lower and
+# twice as quick, so the world reads as having distance to it.
+
+#: Silhouette of the far band: one authored column height per column of the
+#: repeat. It starts and ends on the same height, so the seam is invisible.
+DISTANT_FAR_PROFILE: tuple[int, ...] = (
+    20,
+    22,
+    26,
+    30,
+    34,
+    38,
+    42,
+    44,
+    42,
+    38,
+    34,
+    30,
+    26,
+    22,
+    20,
+    18,
+    20,
+    22,
+    26,
+    30,
+    34,
+    38,
+    42,
+    44,
+    46,
+    44,
+    40,
+    34,
+    28,
+    24,
+    22,
+    20,
+)
+
+#: The same trick at a lower amplitude and a finer rhythm, so the near band does
+#: not look like a copy of the far one sliding behind it.
+DISTANT_NEAR_PROFILE: tuple[int, ...] = (
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24,
+    26,
+    24,
+    22,
+    20,
+    18,
+    16,
+    14,
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24,
+    26,
+    28,
+    30,
+    32,
+    30,
+    26,
+    22,
+    18,
+    16,
+    14,
+    12,
+)
+
+DISTANT_PROFILES = (DISTANT_FAR_PROFILE, DISTANT_NEAR_PROFILE)
+
+#: The profiles are authored on the shared pixel grid, so a repeat must be a whole
+#: number of blocks wide or the blocks would not line up.
+_EXPECTED_DISTANT_COLUMNS = settings.DISTANT_TILE_WIDTH // settings.PIXEL_SCALE
+for _profile in DISTANT_PROFILES:
+    if len(_profile) != _EXPECTED_DISTANT_COLUMNS:
+        raise ValueError(
+            f"distant profile has {len(_profile)} columns, "
+            f"expected {_EXPECTED_DISTANT_COLUMNS}"
+        )
+del _profile
+
+
+class SceneryLayer:
+    """One cached silhouette band scrolling sideways behind the clouds.
+
+    Only the texture offset moves. The band always stands on ``base_y``, the
+    same line the ground is drawn at, so the two can never leave a gap between
+    them however the offset happens to land.
+    """
+
+    #: Authored rows of rim light along the top edge of the silhouette.
+    RIM_ROWS = 2
+
+    def __init__(
+        self,
+        profile: tuple[int, ...],
+        height: int,
+        color: tuple[int, int, int],
+        highlight: tuple[int, int, int],
+        speed: float,
+        width: int = settings.SCREEN_WIDTH,
+        base_y: int = settings.DISTANT_BASE_Y,
+    ) -> None:
+        self.width = width
+        self.height = height
+        self.base_y = base_y
+        self.speed = speed
+        self.tile_width = settings.DISTANT_TILE_WIDTH
+        self.offset = 0.0
+        if max(profile) * settings.PIXEL_SCALE > height:
+            raise ValueError(
+                f"distant crest {max(profile)} does not fit a layer {height} tall"
+            )
+        self._tile = self._build(profile, color, highlight)
+
+    def _build(
+        self,
+        profile: tuple[int, ...],
+        color: tuple[int, int, int],
+        highlight: tuple[int, int, int],
+    ) -> pygame.Surface:
+        """Paint one repeat of the silhouette from its column heights."""
+        block = settings.PIXEL_SCALE
+        tile = pygame.Surface((len(profile) * block, self.height), pygame.SRCALPHA)
+        for column, value in enumerate(profile):
+            top = self.height - value * block
+            x = column * block
+            pygame.draw.rect(
+                tile,
+                color,
+                pygame.Rect(x, top, block, self.height - top),
+            )
+            # A lit rim along the crest separates the band from the sky behind it.
+            pygame.draw.rect(
+                tile,
+                highlight,
+                pygame.Rect(x, top, block, self.RIM_ROWS * block),
+            )
+        return tile
+
+    @property
+    def top(self) -> int:
+        """Where the band starts on the y axis."""
+        return self.base_y - self.height
+
+    def update(self, dt: float) -> None:
+        """Scroll left, keeping the offset inside one repeat."""
+        self.offset = (self.offset + self.speed * dt) % self.tile_width
+
+    def draw(self, surface: pygame.Surface) -> None:
+        """Blit enough repeats to cover the width, starting from the offset."""
+        x = -round(self.offset)
+        while x < self.width:
+            surface.blit(self._tile, (x, self.top))
+            x += self.tile_width
+
+    def clear_offset(self) -> None:
+        self.offset = 0.0
+
+
+class SceneryField:
+    """The stack of distant bands, drawn far to near."""
+
+    def __init__(self, width: int = settings.SCREEN_WIDTH) -> None:
+        self.width = width
+        self.layers = [
+            SceneryLayer(
+                profile=profile,
+                height=height,
+                color=color,
+                highlight=highlight,
+                speed=speed,
+                width=width,
+            )
+            for profile, height, color, highlight, speed in zip(
+                DISTANT_PROFILES,
+                settings.DISTANT_HEIGHTS,
+                settings.DISTANT_COLORS,
+                settings.DISTANT_HIGHLIGHTS,
+                settings.DISTANT_SPEEDS,
+                strict=True,
+            )
+        ]
+
+    def update(self, dt: float) -> None:
+        for layer in self.layers:
+            layer.update(dt)
+
+    def draw(self, surface: pygame.Surface) -> None:
+        for layer in self.layers:
+            layer.draw(surface)
+
+    def __iter__(self) -> Iterator[SceneryLayer]:
+        return iter(self.layers)
+
+    def __len__(self) -> int:
+        return len(self.layers)
 
 
 # --- Ground -----------------------------------------------------------------
@@ -329,22 +740,32 @@ class GroundBand:
         self._tile = self._build_tile()
 
     def _build_tile(self) -> pygame.Surface:
-        """One repeat of the ground: a solid grass band over marked soil."""
+        """One repeat of the ground: a grass band over marked soil.
+
+        Everything is drawn on whole-pixel rectangles. The layout is deliberate
+        about two rows:
+
+        * the row just above the soil is left as unbroken base colour, so the
+          strip under the bird never flickers as the texture scrolls past;
+        * the grass blades are confined to the columns and rows that leave the
+          bottom of the band and the sampled ground columns alone.
+        """
         tile = pygame.Surface((self.tile_width, settings.GROUND_HEIGHT))
+        soil_top = settings.GROUND_GRASS_HEIGHT
         tile.fill(settings.GROUND_SOIL_COLOR)
 
-        # Soil texture: a short dark mark at the start of every tile, so the
-        # repeat is obvious once the ground starts scrolling.
-        pygame.draw.rect(
-            tile,
-            settings.GROUND_SOIL_MARK_COLOR,
-            pygame.Rect(
-                0,
-                settings.GROUND_GRASS_HEIGHT,
-                settings.GROUND_MARK_WIDTH,
-                settings.GROUND_HEIGHT - settings.GROUND_GRASS_HEIGHT,
-            ),
-        )
+        # Soil texture: pebbles and shadowed pockets, so the repeat is obvious
+        # once the ground starts scrolling.
+        for row_index, offset in enumerate(settings.GROUND_PEBBLE_ROWS):
+            y = soil_top + offset
+            if y >= settings.GROUND_HEIGHT:
+                continue
+            x = (settings.GROUND_MARK_WIDTH * row_index) % self.tile_width
+            pygame.draw.rect(
+                tile,
+                settings.GROUND_SOIL_MARK_COLOR,
+                pygame.Rect(x, y, settings.GROUND_MARK_WIDTH, 2),
+            )
 
         # A darker lip along the very top, then unbroken grass: the band right
         # below the surface stays one flat colour.
@@ -366,6 +787,28 @@ class GroundBand:
                 ),
             ),
         )
+
+        # Blades of grass poking up out of the base colour. The last grass row is
+        # skipped so the flat band under the bird survives, and only the columns
+        # in GROUND_BLADE_COLUMNS are used so the sampled ground columns stay on
+        # the base colour too.
+        for column in settings.GROUND_BLADE_COLUMNS:
+            if column >= self.tile_width:
+                continue
+            top = settings.GROUND_GRASS_EDGE_HEIGHT
+            bottom = settings.GROUND_GRASS_HEIGHT - 1
+            if bottom <= top:
+                continue
+            pygame.draw.rect(
+                tile,
+                settings.GROUND_GRASS_BLADE_COLOR,
+                pygame.Rect(
+                    column,
+                    top,
+                    settings.PIXEL_SCALE,
+                    bottom - top,
+                ),
+            )
         return tile
 
     @property
@@ -500,10 +943,12 @@ class BirdSprite:
         size: int = settings.BIRD_SIZE,
         tilt_steps: int = settings.BIRD_TILT_STEPS,
         wing_frames: int = settings.BIRD_WING_FRAMES,
+        scale: int = settings.BIRD_PIXEL_SCALE,
     ) -> None:
         self.size = size
         self.tilt_steps = max(tilt_steps, 1)
         self.wing_frames = max(wing_frames, 1)
+        self.scale = max(scale, 1)
         self.wing_phase = 0.0
         self._frames: dict[tuple[int, int], pygame.Surface] = {}
         self._logical: dict[int, pygame.Surface] = {}
@@ -596,8 +1041,8 @@ class BirdSprite:
         return pygame.transform.scale(
             rotated,
             (
-                rotated.get_width() * settings.BIRD_PIXEL_SCALE,
-                rotated.get_height() * settings.BIRD_PIXEL_SCALE,
+                rotated.get_width() * self.scale,
+                rotated.get_height() * self.scale,
             ),
         )
 
@@ -652,12 +1097,19 @@ class Visuals:
         self.width = width
         self.height = height
         self.clouds = CloudField(width=width, rng=rng)
+        self.distant = SceneryField(width=width)
         self.ground = GroundBand(width=width)
         self.bird = BirdSprite()
+        # The same sprite again, one size up: the attract screen gets a big bird
+        # for free instead of a second, separately authored piece of artwork.
+        self.title_bird = BirdSprite(scale=settings.TITLE_BIRD_SCALE)
+        self.pixelfont = PixelFont()
         self.text = TextCache()
         self.panels = PanelCache()
         self._sky: pygame.Surface | None = None
+        self._labelers: dict[int, PixelLabeler] = {}
         self.score_pulse = 0.0
+        self.idle_phase = 0.0
 
     # --- Animation -----------------------------------------------------------
 
@@ -669,17 +1121,46 @@ class Visuals:
     ) -> None:
         """Advance the decorative animation by ``dt`` seconds.
 
-        The two flags let the game freeze the scene on the game-over screen
-        while still animating the attract screen, without this module needing to
-        know anything about :class:`~flappy_bird.state.GameState`.
+        The two flags let the game freeze the scene on the game-over screen while
+        still animating the attract screen, without this module needing to know
+        anything about :class:`~flappy_bird.state.GameState`.
+
+        The attract-screen bob rides on ``animate_bird`` alongside the wing beat,
+        which is deliberate: on ``START`` there is no physics to read a tilt from,
+        so the wing animation is the only thing the player sprite could show.
         """
         if drift_clouds:
             self.clouds.update(dt)
+            self.distant.update(dt)
             self.ground.update(dt)
         if animate_bird:
             self.bird.update(dt)
+            self.title_bird.update(dt)
+            self.idle_phase = (
+                self.idle_phase + dt / settings.IDLE_BOB_STEP_SECONDS
+            ) % 1.0
         if self.score_pulse > 0.0:
             self.score_pulse = max(0.0, self.score_pulse - dt)
+
+    @property
+    def idle_bob(self) -> int:
+        """Vertical offset of the attract-screen bird, in whole pixels.
+
+        Read from a fixed table rather than a sine, so the offset is always an
+        integer and the bird never lands between two pixel rows.
+        """
+        steps = settings.IDLE_BOB_STEPS
+        index = int(self.idle_phase * len(steps))
+        return steps[min(index, len(steps) - 1)]
+
+    @property
+    def prompt_visible(self) -> bool:
+        """Whether the start prompt is lit on this beat.
+
+        Driven off the same phase as the bob, so it stays on the pixel grid and
+        costs nothing to keep in step with it.
+        """
+        return (self.idle_phase * 4) % 1.0 < settings.PROMPT_VISIBLE_FRACTION
 
     # --- Game feel -----------------------------------------------------------
 
@@ -717,6 +1198,10 @@ class Visuals:
     def draw_sky(self, surface: pygame.Surface) -> None:
         surface.blit(self.sky, (0, 0))
 
+    def draw_distant(self, surface: pygame.Surface) -> None:
+        """Draw the silhouette bands, between the sky and the clouds."""
+        self.distant.draw(surface)
+
     def draw_clouds(self, surface: pygame.Surface) -> None:
         self.clouds.draw(surface)
 
@@ -726,6 +1211,49 @@ class Visuals:
     def draw_bird(self, surface: pygame.Surface, player: Player) -> None:
         """Draw the player using its position and velocity only."""
         self.bird.draw(surface, player.x, player.y, player.velocity_y)
+
+    def draw_title_bird(self, surface: pygame.Surface) -> None:
+        """Draw the oversized attract-screen bird at its idle bob.
+
+        The offset is added here and nowhere else, so ``player.y`` stays exactly
+        where the physics left it: the attract screen animates without the bird
+        ever being part of the simulation.
+        """
+        self.title_bird.draw(
+            surface,
+            settings.TITLE_BIRD_X,
+            settings.TITLE_BIRD_Y + self.idle_bob,
+        )
+
+    # --- Pixel text ----------------------------------------------------------
+
+    def labeler(self, scale: int) -> PixelLabeler:
+        """The cached pixel labeler for a scale, so callers can share one."""
+        labeler = self._labelers.get(scale)
+        if labeler is None:
+            labeler = PixelLabeler(self.pixelfont, scale)
+            self._labelers[scale] = labeler
+        return labeler
+
+    def draw_centered_text(
+        self,
+        surface: pygame.Surface,
+        text: str,
+        y: int,
+        scale: int,
+        color: tuple[int, int, int] = settings.TEXT_COLOR,
+        shadow: tuple[int, int, int] | None = settings.TEXT_SHADOW_COLOR,
+    ) -> pygame.Rect:
+        """Draw one centred line of pixel text, shadowed by default."""
+        return self.pixelfont.draw_centered(
+            surface,
+            text,
+            self.width // 2,
+            y,
+            scale,
+            color,
+            shadow,
+        )
 
 
 #: Shared sprite for callers that only have a player and no scene, such as

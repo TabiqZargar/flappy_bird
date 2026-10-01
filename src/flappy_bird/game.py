@@ -37,7 +37,9 @@ class Game:
     ============  ==========================  ==========================
 
     Escape quits from any state. Only ``PLAYING`` advances the simulation, so
-    the attract screen and the game-over screen are both frozen worlds.
+    the attract screen runs no physics and the game-over screen is a frozen
+    world. The attract screen is not frozen *visually*, though: the scenery
+    drifts and the bird idles, because a still title card reads as a pause.
     """
 
     def __init__(self, headless: bool = False) -> None:
@@ -54,10 +56,6 @@ class Game:
             (settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT)
         )
         self.clock = pygame.time.Clock()
-        self.score_font = pygame.font.Font(None, settings.SCORE_FONT_SIZE)
-        self.banner_font = pygame.font.Font(None, settings.BANNER_FONT_SIZE)
-        self.title_font = pygame.font.Font(None, settings.TITLE_FONT_SIZE)
-        self.difficulty_font = pygame.font.Font(None, settings.DIFFICULTY_FONT_SIZE)
 
         self.player = Player()
         self.pipe_manager = PipeManager()
@@ -226,14 +224,21 @@ class Game:
     def update(self, dt: float) -> None:
         """Advance the simulation by ``dt`` seconds while playing.
 
-        The decoration always ticks, so the attract screen is alive and the
-        game-over screen settles; only the world itself is frozen outside
-        ``PLAYING``: no physics, no pipes, no scoring.
+        The decoration always ticks outside the game-over screen, so the attract
+        screen is alive and the world settles once the round is lost. Only the
+        world itself is frozen outside ``PLAYING``: no physics, no pipes, no
+        scoring.
+
+        ``animate_bird`` is therefore true for ``START`` as well: there is no
+        velocity to tilt a wing against on the attract screen, so the wing beat is
+        the only life the sprite has. It changes nothing physical, because the
+        start screen has no player motion to animate.
         """
+        frozen = self.state is GameState.GAME_OVER
         self.visuals.update(
             dt,
-            animate_bird=self.state.is_playing,
-            drift_clouds=self.state is not GameState.GAME_OVER,
+            animate_bird=not frozen,
+            drift_clouds=not frozen,
         )
         if not self.state.is_playing:
             return
@@ -276,29 +281,75 @@ class Game:
 
     def render(self) -> None:
         """Draw one frame: the shared world, then the current state's screen."""
-        self.render_world()
+        # On the attract screen the world bird stands in for the title bird, so
+        # it is left out of the shared pass to avoid two birds in one frame.
+        attract = self.state is GameState.START
+        self.render_world(show_bird=not attract)
         {
             GameState.START: self.render_start_screen,
             GameState.PLAYING: self.render_playing,
             GameState.GAME_OVER: self.render_game_over,
         }[self.state]()
 
-    def render_world(self) -> None:
+    def render_world(self, show_bird: bool = True) -> None:
         """Draw the background, the pipes, the bird and the ground.
 
-        Shared by every state, so the bird stays visible on the start and
-        game-over screens and the world is still visible underneath the cards.
+        Shared by every state, back to front: sky, distant scenery, clouds, pipes,
+        bird, ground. The world is still visible underneath the start and
+        game-over cards, and the ground is last so it always covers the bottom of
+        the pipes.
         """
         self.visuals.draw_sky(self.screen)
+        self.visuals.draw_distant(self.screen)
         self.visuals.draw_clouds(self.screen)
         for pipe in self.pipes:
             pipe.draw(self.screen)
-        self.visuals.draw_bird(self.screen, self.player)
+        if show_bird:
+            self.visuals.draw_bird(self.screen, self.player)
         self.visuals.draw_ground(self.screen)
 
     def render_start_screen(self) -> None:
-        """Attract screen: the title and a single start prompt."""
-        self._draw_panel("FLAPPY BIRD", ["Press SPACE or Click to Start"])
+        """Attract screen: a title, an idle bird and a single start prompt.
+
+        Deliberately not a card. The bird bobs behind real UI, so the first thing
+        a player sees is the game itself rather than a menu sitting on top of it.
+        """
+        self.visuals.draw_title_bird(self.screen)
+        self.visuals.draw_centered_text(
+            self.screen,
+            "FLAPPY BIRD",
+            settings.TITLE_TEXT_Y,
+            settings.TITLE_TEXT_SCALE,
+            settings.TEXT_TITLE_COLOR,
+        )
+        if self.high_score:
+            self.visuals.draw_centered_text(
+                self.screen,
+                f"BEST: {self.high_score}",
+                settings.TITLE_BEST_Y,
+                settings.PANEL_TEXT_SCALE,
+                settings.TEXT_COLOR,
+                shadow=None,
+            )
+        # The prompt blinks off for a moment each beat so it reads as "press me"
+        # rather than as part of the artwork.
+        if self.visuals.prompt_visible:
+            self.visuals.draw_centered_text(
+                self.screen,
+                "PRESS SPACE TO START",
+                settings.TITLE_PROMPT_Y,
+                settings.PANEL_TEXT_SCALE,
+                settings.TEXT_COLOR,
+                settings.PANEL_TEXT_SHADOW_COLOR,
+            )
+        self.visuals.draw_centered_text(
+            self.screen,
+            "CLICK OR W TO FLAP",
+            settings.TITLE_HINT_Y,
+            settings.PANEL_TEXT_SCALE,
+            settings.TEXT_HINT_COLOR,
+            shadow=None,
+        )
 
     def render_playing(self) -> None:
         """Live play: the world plus the running score."""
@@ -311,19 +362,12 @@ class Game:
         Six possible strings, so the text cache holds one extra entry at most and
         a long run cannot grow it.
         """
-        level = self.difficulty.level
         label = self.visuals.text.render(
-            self.difficulty_font,
-            f"Difficulty {level}",
+            self.visuals.labeler(settings.DIFFICULTY_TEXT_SCALE),
+            f"Difficulty {self.difficulty.level}",
             settings.DIFFICULTY_TEXT_COLOR,
         )
-        self.screen.blit(
-            label,
-            (
-                (settings.SCREEN_WIDTH - label.get_width()) // 2,
-                settings.DIFFICULTY_TEXT_Y,
-            ),
-        )
+        self.screen.blit(label, self._centered_x(label, settings.DIFFICULTY_TEXT_Y))
 
     def render_game_over(self) -> None:
         """Result screen: the final score, the best and a restart prompt."""
@@ -332,7 +376,7 @@ class Game:
             [
                 f"Score: {self.score}",
                 f"Best: {self.high_score}",
-                "Press SPACE or Click to Restart",
+                "Press SPACE to Restart",
             ],
         )
 
@@ -341,7 +385,9 @@ class Game:
 
     def _draw_score(self) -> None:
         label = self.visuals.text.render(
-            self.score_font, f"Score: {self.score}", self.visuals.score_color()
+            self.visuals.labeler(settings.SCORE_TEXT_SCALE),
+            f"Score: {self.score}",
+            self.visuals.score_color(),
         )
         self.screen.blit(label, self._centered_x(label, settings.SCORE_TEXT_Y))
 
@@ -349,7 +395,11 @@ class Game:
         return ((settings.SCREEN_WIDTH - label.get_width()) // 2, y)
 
     def _draw_panel(self, title: str, lines: list[str]) -> None:
-        """Draw a centered translucent card with a title and body lines."""
+        """Draw a centered blocky card with a title and body lines."""
         self.visuals.panels.draw(
-            self.screen, title, lines, self.title_font, self.banner_font
+            self.screen,
+            title,
+            lines,
+            self.visuals.labeler(settings.PANEL_TITLE_SCALE),
+            self.visuals.labeler(settings.PANEL_TEXT_SCALE),
         )
