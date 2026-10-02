@@ -327,10 +327,11 @@ class Game:
                 settings.TEXT_COLOR,
                 shadow=None,
             )
-        prompt = "PRESS SPACE TO START"
-        if not self.visuals.prompt_visible:
-            prompt = ""
-        card_rect = self._draw_prompt_card(prompt)
+        if self.visuals.prompt_visible:
+            prompt_text = "PRESS SPACE TO START"
+        else:
+            prompt_text = " "
+        card_rect = self._draw_prompt_card(prompt_text)
         hint_y = card_rect.bottom + settings.TITLE_HINT_GAP
         self.visuals.draw_centered_text(
             self.screen,
@@ -396,9 +397,10 @@ class Game:
         )
 
     def _draw_prompt_card(self, prompt: str) -> pygame.Rect:
+        lines = [prompt] if prompt else [" "]
         panel = self.visuals.panels.render(
             "",
-            [prompt] if prompt else [""],
+            lines,
             self.visuals.labeler(settings.PANEL_TITLE_SCALE),
             self.visuals.labeler(settings.PANEL_TEXT_SCALE),
             settings.TEXT_COLOR,
