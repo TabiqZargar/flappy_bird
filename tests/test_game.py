@@ -1943,12 +1943,10 @@ class TestStartScreenLayout:
         assert panel.get_width() < settings.SCREEN_WIDTH
         assert panel.get_height() < settings.SCREEN_HEIGHT
 
-    def test_the_start_screen_is_not_a_card(self, idle_game):
-        # The card is the game-over look; reusing it here is what the attract
-        # screen is supposed to stop doing.
+    def test_the_start_screen_prompt_sits_inside_a_card(self, idle_game):
         idle_game.render()
         shown = self_colors(idle_game)
-        assert settings.PANEL_FILL_COLOR not in shown
+        assert settings.PANEL_FILL_COLOR in shown, "start prompt should be in a card"
 
     def test_the_game_over_screen_is_a_card(self, game):
         game.state = GameState.GAME_OVER

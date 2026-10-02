@@ -309,11 +309,7 @@ class Game:
         self.visuals.draw_ground(self.screen)
 
     def render_start_screen(self) -> None:
-        """Attract screen: a title, an idle bird and a single start prompt.
-
-        Deliberately not a card. The bird bobs behind real UI, so the first thing
-        a player sees is the game itself rather than a menu sitting on top of it.
-        """
+        """Attract screen: a title, an idle bird and a start prompt in a card."""
         self.visuals.draw_title_bird(self.screen)
         self.visuals.draw_centered_text(
             self.screen,
@@ -331,21 +327,15 @@ class Game:
                 settings.TEXT_COLOR,
                 shadow=None,
             )
-        # The prompt blinks off for a moment each beat so it reads as "press me"
-        # rather than as part of the artwork.
-        if self.visuals.prompt_visible:
-            self.visuals.draw_centered_text(
-                self.screen,
-                "PRESS SPACE TO START",
-                settings.TITLE_PROMPT_Y,
-                settings.PANEL_TEXT_SCALE,
-                settings.TEXT_COLOR,
-                settings.PANEL_TEXT_SHADOW_COLOR,
-            )
+        prompt = "PRESS SPACE TO START"
+        if not self.visuals.prompt_visible:
+            prompt = ""
+        card_rect = self._draw_prompt_card(prompt)
+        hint_y = card_rect.bottom + settings.TITLE_HINT_GAP
         self.visuals.draw_centered_text(
             self.screen,
             "CLICK OR W TO FLAP",
-            settings.TITLE_HINT_Y,
+            hint_y,
             settings.PANEL_TEXT_SCALE,
             settings.TEXT_HINT_COLOR,
             shadow=None,
@@ -402,4 +392,19 @@ class Game:
             lines,
             self.visuals.labeler(settings.PANEL_TITLE_SCALE),
             self.visuals.labeler(settings.PANEL_TEXT_SCALE),
+            settings.TEXT_COLOR,
         )
+
+    def _draw_prompt_card(self, prompt: str) -> pygame.Rect:
+        panel = self.visuals.panels.render(
+            "",
+            [prompt] if prompt else [""],
+            self.visuals.labeler(settings.PANEL_TITLE_SCALE),
+            self.visuals.labeler(settings.PANEL_TEXT_SCALE),
+            settings.TEXT_COLOR,
+        )
+        rect = panel.get_rect(
+            centerx=settings.SCREEN_WIDTH // 2, top=settings.TITLE_PROMPT_CARD_TOP
+        )
+        self.screen.blit(panel, rect)
+        return rect

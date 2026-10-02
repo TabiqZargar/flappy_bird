@@ -202,9 +202,9 @@ TITLE_BIRD_SCALE = 3
 TITLE_BIRD_X = SCREEN_WIDTH // 2
 TITLE_BIRD_Y = 300
 TITLE_TEXT_Y = 96
-TITLE_BEST_Y = 400
-TITLE_PROMPT_Y = 452
-TITLE_HINT_Y = 486
+TITLE_BEST_Y = 340
+TITLE_PROMPT_CARD_TOP = 380
+TITLE_HINT_GAP = 8
 
 #: The idle bob is a fixed table of whole-pixel offsets rather than a sine, so it
 #: stays on the pixel grid and reads as a deliberate arcade hop.
