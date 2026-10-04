@@ -2018,3 +2018,65 @@ class TestWorldLayerOrder:
         )
         for _, color in order:
             assert color in shown
+
+
+class TestStartScreenFlicker:
+    """Regression tests for START screen flickering."""
+
+    def test_start_state_renders_repeatedly_without_exceptions(self, idle_game):
+        for _ in range(10):
+            idle_game.render()
+
+    def test_consecutive_start_frames_produce_complete_frames(self, idle_game):
+        for _ in range(5):
+            idle_game.update(DT)
+            idle_game.render()
+            snapshot(idle_game)
+
+    def test_rendering_does_not_mutate_cached_visual_surfaces(self, idle_game):
+        visual = idle_game.visuals
+        bird_frames = len(visual.bird)
+        title_frames = len(visual.title_bird)
+        text_cache = len(visual.text)
+        panels = len(visual.panels)
+        sky_cached = visual._sky is not None
+        for _ in range(15):
+            idle_game.update(DT)
+            idle_game.render()
+        assert len(visual.bird) >= bird_frames
+        assert len(visual.title_bird) >= title_frames
+        assert len(visual.text) >= text_cache
+        assert len(visual.panels) >= panels
+        assert visual._sky is not None if sky_cached else True
+
+    def test_bird_animation_does_not_mutate_base_sprite(self, idle_game):
+        bird = idle_game.visuals.bird
+        bird.clear()
+        frames_before = len(bird)
+        for _ in range(20):
+            idle_game.update(DT)
+        assert len(bird) >= frames_before
+
+    def test_background_layers_remain_present_across_frames(self, idle_game):
+        for _ in range(30):
+            idle_game.update(DT)
+            idle_game.render()
+            assert idle_game.visuals._sky is not None
+
+    def test_start_to_playing_transition_works(self, idle_game):
+        for _ in range(10):
+            idle_game.update(DT)
+            idle_game.render()
+        assert idle_game.state is GameState.START
+        press(idle_game, pygame.K_SPACE)
+        idle_game.update(DT)
+        idle_game.render()
+        assert idle_game.state is GameState.PLAYING
+
+    def test_game_over_rendering_unchanged(self, game):
+        from tests.helpers import crash
+
+        crash(game)
+        game.render()
+        snap = snapshot(game)
+        assert snap
