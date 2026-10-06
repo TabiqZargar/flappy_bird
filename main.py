@@ -1,4 +1,4 @@
-"""Entry point: ``python main.py`` from the repository root .
+"""Entry point: ``python main.py`` from the repository root.
 
 Run ``python  -m pip install -e .`` once first, which is what puts ``flappy_bird``
 on the import path. Everything else lives in the package.
